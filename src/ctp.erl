@@ -15,9 +15,12 @@
 
 -export([
     start_trace/1,
+    start_trace/2,
     stop_trace/0,
     analyse/0,
-    analyse/1
+    analyse/1,
+    run/2,
+    run/5
 ]).
 
 %% Generic start/stop API
@@ -37,6 +40,7 @@
 
 -record(state, {
     tracing = false :: boolean(),
+    area = local :: local | global, %% see erlang:trace_pattern() for details about local/global
     data = []:: [{module(), [{{Fun :: atom(), non_neg_integer()}, Count :: non_neg_integer(),Time :: non_neg_integer()}]}], % {ets, [{internal_select_delete,2,1,1}, {internal_delete_all,2,3,4}]}
     traced_procs :: term()
 }).
@@ -45,7 +49,11 @@
 %%% API
 %%%===================================================================
 start_trace(PidPortSpec) ->
-    gen_server:call(?MODULE, {start_trace, PidPortSpec}, infinity).
+    start_trace(PidPortSpec, #{}).
+
+start_trace(PidPortSpec, Options0) ->
+    Options = maps:merge(#{area => local}, Options0),
+    gen_server:call(?MODULE, {start_trace, PidPortSpec, Options}, infinity).
 
 stop_trace() ->
     gen_server:call(?MODULE, stop_trace, infinity).
@@ -56,6 +64,23 @@ analyse() ->
 analyse(Options0) ->
     Options = maps:merge(#{sort => none, format => callgrind, progress => undefined}, Options0),
     gen_server:call(?MODULE, {analyse, Options}, infinity).
+
+run(PidPortSpec, TimeMs) ->
+    run(PidPortSpec, TimeMs, #{}, #{}, "/tmp/callgrind.001").
+
+run(PidPortSpec, TimeMs, TraceOptions, AnalysisOptions, Filename) ->
+    % see if server was started
+    NotRunning = whereis(?MODULE) =:= undefined,
+    NotRunning andalso start(),
+    %
+    start_trace(PidPortSpec, TraceOptions),
+    receive after TimeMs -> ok end, % this is just sleep(TimeMs)
+    ctp:stop_trace(),
+    %
+    {ok, Trace} = analyse(AnalysisOptions),
+    is_list(Filename) andalso (catch file:write_file(Filename, Trace)),
+    NotRunning andalso stop(),
+    ok.
 
 %%%===================================================================
 %%% Generic start/stop API
@@ -134,28 +159,28 @@ init([]) ->
     {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
     {stop, Reason :: term(), NewState :: #state{}}).
 
-handle_call({start_trace, PidPortSpec}, _From, #state{tracing = false} = State) ->
-    erlang:trace_pattern({'_', '_', '_'}, true, [call_time]),
-    erlang:trace(PidPortSpec, true, [call]),
-    {reply, ok, State#state{tracing = true, traced_procs = PidPortSpec}};
+handle_call({start_trace, PidPortSpec, #{area := Area}}, _From, #state{tracing = false} = State) ->
+    trace_pattern(true, Area),
+    erlang:trace(PidPortSpec, true, [call, arity, silent]),
+    {reply, ok, State#state{tracing = true, traced_procs = PidPortSpec, area = Area}};
 handle_call({start_trace, _PidPortSpec}, _From, #state{tracing = true} = State) ->
     {reply, {error, already_started}, State};
 
-handle_call(stop_trace, _From, #state{tracing = true, traced_procs = PidPortSpec} = State) ->
+handle_call(stop_trace, _From, #state{tracing = true, traced_procs = PidPortSpec, area = Area} = State) ->
+    trace_pattern(pause, Area),
     erlang:trace(PidPortSpec, false, [call]),
-    erlang:trace_pattern({'_', '_', '_'}, pause, [call_time]),
     {reply, ok, State#state{tracing = false}};
 handle_call(stop_trace, _From, #state{tracing = false} = State) ->
     {reply, {error, not_started}, State};
 
 handle_call({analyse, _}, _From, #state{tracing = true} = State) ->
     {reply, {error, tracing}, State};
-handle_call({analyse, #{format := Format, sort := SortBy, progress := Progress}}, _From, #state{tracing = false} = State) ->
-    erlang:trace_delivered(all), % don't use PidPortSpec here!
+handle_call({analyse, #{format := Format, sort := SortBy, progress := Progress}}, _From,
+    #state{tracing = false, area = Area} = State) ->
     % collect all functions & their execution time
     {ok, Data} = pmap([{'$system', undefined} | code:all_loaded()], fun trace_time/1, {Progress, trace_info}, infinity),
     %
-    erlang:trace_pattern({'_', '_', '_'}, false, [call_time]),
+    trace_pattern(false, Area),
     %
     Formatted = format_analysis(Data, {Progress, export}, Format, SortBy),
     {reply, {ok, Formatted}, State#state{data = Data}};
@@ -230,24 +255,35 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+trace_pattern(Action, global) ->
+    trace_pattern_impl(Action, [call_time]);
+trace_pattern(Action, local) ->
+    trace_pattern_impl(Action, [local, call_time]).
+
+trace_pattern_impl(Action, Flags) ->
+    % erlang:system_flag(multi_scheduling, block), % while this seems to be correct, it stops the node and lets it die
+    erlang:trace_pattern({'_', '_', '_'}, Action, Flags),
+    % erlang:system_flag(multi_scheduling, unblock), % node is dead by now
+    ok.
+
 pmap(List, Fun, Message, Timeout) ->
     Parent = self(),
     Workers = [spawn_monitor(fun() ->
         process_flag(priority, low),
         Parent ! {self(), Fun(Item), element(1, case is_list(Item) of true -> hd(Item); _ -> Item end)}
                              end) || Item <- List],
-    gather(Workers, {Message, 0, length(List)}, Timeout, []).
+    gather(Workers, {Message, 0, length(List), undefined}, Timeout, []).
 
 gather([], _Progress, _Timeout, Acc) ->
     {ok, Acc};
-gather(Workers, {Message, Done, Total} = Progress, Timeout, Acc) ->
+gather(Workers, {Message, Done, Total, PrState} = Progress, Timeout, Acc) ->
     receive
         {Pid, Res, Name} when is_pid(Pid) ->
             case lists:keytake(Pid, 1, Workers) of
                 {value, {Pid, MRef}, NewWorkers} ->
                     erlang:demonitor(MRef, [flush]),
-                    report_progress(Message, Name, Done + 1, Total),
-                    gather(NewWorkers, {Message, Done + 1, Total}, Timeout, [Res | Acc]);
+                    NewPrState = report_progress(Message, Name, Done + 1, Total, PrState),
+                    gather(NewWorkers, {Message, Done + 1, Total, NewPrState}, Timeout, [Res | Acc]);
                 false ->
                     gather(Workers, Progress, Timeout, Acc)
             end;
@@ -292,12 +328,21 @@ expand_mods(Data) ->
     List = lists:append(Data),
     lists:append([[{Mod, F, A, C, T} || {F, A, C, T} <- Funs] || {Mod, Funs} <- List]).
 
-format_analysis(Data, _Progress, none, _) ->
+sort_column(call_time) -> 5;
+sort_column(call_count) -> 4;
+sort_column(module) -> 1;
+sort_column('fun') -> 2.
+
+format_analysis(Data, _Progress, none, none) ->
     lists:append(Data);
+format_analysis(Data, _Progress, none, Order) ->
+    lists:append([lists:reverse(lists:keysort(sort_column(Order), expand_mods(Data)))]);
+
 format_analysis(Data, _Progress, text, none) ->
     io_lib:format("~p", [lists:append(Data)]);
-format_analysis(Data, _Progress, text, call_time) ->
-    io_lib:format("~p", [lists:reverse(lists:keysort(5, expand_mods(Data)))]);
+format_analysis(Data, _Progress, text, Order) ->
+    io_lib:format("~p", [lists:reverse(lists:keysort(sort_column(Order), expand_mods(Data)))]);
+
 format_analysis(Data, Progress, callgrind, _) ->
     % prepare data in parallel
     {ok, Lines} = pmap(Data, fun format_callgrind/1, Progress, infinity),
@@ -322,9 +367,20 @@ format_callgrind(ModList) ->
                     end, NextAcc, Funs)
                 end, <<>>, ModList).
 
-report_progress({Progress, Message}, Module, Done, Total) when is_function(Progress, 4) ->
-    Progress(Message, Module, Done, Total);
-report_progress({Progress, Message}, Module, Done, Total) when is_pid(Progress) ->
-    Progress ! {Message, Module, Done, Total};
-report_progress({undefined, Message}, Module, Done, Total) ->
-    io:format(group_leader(), "~s: ~s done (~b/~b)~n", [Message, Module, Done, Total]).
+report_progress({Progress, Message}, Module, Done, Total, PrState) when is_function(Progress, 5) ->
+    Progress(Message, Module, Done, Total, PrState);
+report_progress({Progress, Message}, Module, Done, Total, PrState) when is_pid(Progress) ->
+    Progress ! {Message, Module, Done, Total, PrState};
+
+% default progress printer
+report_progress({undefined, _}, _, Done, Done, _) ->
+    io:format(group_leader(), " complete.~n", []),
+    undefined;
+report_progress({undefined, Info}, _, _, Total, undefined) ->
+    io:format(group_leader(), "~-20s started: ", [Info]),
+    Total div 10;
+report_progress({undefined, _}, _Module, Done, Total, Next) when Done > Next ->
+    io:format(group_leader(), " ~b% ", [Done * 100 div Total]),
+    Done + (Total div 10);
+report_progress(_, _, _, _, PrState) ->
+    PrState.
