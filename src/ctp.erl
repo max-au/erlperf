@@ -17,12 +17,12 @@
     start_trace/0,
     start_trace/1,
     stop_trace/0,
-    analyse/0,
-    analyse/1,
+    collect/0,
+    collect/1,
     format/0,
     format/1,
-    run/1,
-    run/5,
+    sample/4,
+    run/4,
     replay/1
 ]).
 
@@ -63,12 +63,12 @@ start_trace(Options0) ->
 stop_trace() ->
     gen_server:call(?MODULE, stop_trace, infinity).
 
-analyse() ->
-    analyse(#{}).
+collect() ->
+    collect(#{}).
 
-analyse(Options0) ->
+collect(Options0) ->
     Options = maps:merge(#{progress => undefined}, Options0),
-    gen_server:call(?MODULE, {analyse, Options}, infinity).
+    gen_server:call(?MODULE, {collect, Options}, infinity).
 
 format() ->
     format(#{}).
@@ -77,31 +77,30 @@ format(Options0) ->
     Options = maps:merge(#{sort => none, format => callgrind, progress => undefined}, Options0),
     gen_server:call(?MODULE, {format, Options}, infinity).
 
-run(TimeMs) ->
-    run(all, TimeMs, #{}, #{}, "/tmp/callgrind.001").
+sample(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
+    % do everything in-place, don't start profiler
+    TracerPid = spawn(fun tracer/0),
+    TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
+    [erlang:trace_pattern(MFA, TraceSpec, [local]) || MFA <- MFAList],
+    erlang:trace(PidPortSpec, true, [call, {tracer, TracerPid}]),
+    receive after TimeMs -> ok end, % this is just sleep(TimeMs)
+    erlang:trace(PidPortSpec, false, [call]),
+    {[], Samples} = fetch_trace(TracerPid, Progress, infinity),
+    Samples.
 
-run(PidPortSpec, TimeMs, TraceOptions, AnalysisOptions, Filename) ->
-    % see if server was started
-    NotRunning = whereis(?MODULE) =:= undefined,
-    NotRunning andalso start(),
-    %
+run(PidPortSpec, TimeMs, TraceOptions, CollectOptions) ->
     start_trace(maps:merge(#{spec => PidPortSpec}, TraceOptions)),
-    receive after TimeMs -> rand:uniform() end, % this is just sleep(TimeMs)
+    receive after TimeMs -> ok end, % this is just sleep(TimeMs)
     stop_trace(),
-    %
-    ok = analyse(AnalysisOptions),
-    Res = format(AnalysisOptions),
-    case Res of
-        {ok, Trace} ->
-            file:write_file(Filename, Trace);
-        {ok, Trace, Samples} ->
-            file:write_file(Filename, Trace),
-            file:write_file(Filename ++ ".trace", term_to_binary(Samples))
-    end,
-    NotRunning andalso stop(),
-    Res.
+    ok = collect(CollectOptions),
+    format(CollectOptions).
 
-replay(Map) ->
+replay(Filename) when is_list(Filename) ->
+    {ok, Bin} = file:read_file(Filename),
+    Map = binary_to_term(Bin),
+    true = is_map(Map),
+    replay(Map);
+replay(Map) when is_map(Map) ->
     Calls = lists:append(maps:values(Map)),
     timer:tc(lists:foreach(fun ({M,F,A}) -> erlang:apply(M,F,A) end, Calls)).
 
@@ -212,10 +211,10 @@ handle_call(stop_trace, _From, #state{tracing = true, traced_procs = PidPortSpec
 handle_call(stop_trace, _From, #state{tracing = false} = State) ->
     {reply, {error, not_started}, State};
 
-handle_call({analyse, _}, _From, #state{tracing = true} = State) ->
+handle_call({collect, _}, _From, #state{tracing = true} = State) ->
     {reply, {error, tracing}, State};
 
-handle_call({analyse, #{progress := Progress}}, _From, #state{tracing = false, tracer = Tracer} = State) ->
+handle_call({collect, #{progress := Progress}}, _From, #state{tracing = false, tracer = Tracer} = State) ->
     {ok, Data} = pmap(
         [{'$system', undefined} | code:all_loaded()],
         Tracer,

@@ -22,6 +22,10 @@ all() ->
     [basic].
 
 basic(Config) when is_list(Config) ->
+    %
+    spawn(fun () -> do_anything(1000, 1000) end),
+    SampleSet = ctp:sample(all, 500, [{ctp_SUITE, '_', '_'}], spawn(fun progress_printer/0)),
+    length(maps:get(undefined, SampleSet)) > 10,
     % ctp:run(all, 50),
     {ok, _} = ctp:start(),
     % start rand() module - otherwise we must handle on_load
@@ -34,11 +38,11 @@ basic(Config) when is_list(Config) ->
     do_other(10000, 10000),
     %
     ok = ctp:stop_trace(),
-    ok = ctp:analyse(#{progress => spawn(fun progress_printer/0)}),
+    ok = ctp:collect(#{progress => spawn(fun progress_printer/0)}),
     {ok, Grind, Trace} = ctp:format(#{format => callgrind}),
-    io:format("Trace: ~s~n", [binary:part(Grind, 1, 300)]),
+    %io:format("Trace: ~s~n", [binary:part(Grind, 1, 300)]),
     file:write_file("/tmp/callgrind.001", Grind),
-    %file:write_file("/tmp/data.001", term_to_binary(Trace)),
+    file:write_file("/tmp/data.001", term_to_binary(Trace)),
     %ctp:replay(Trace),
     %{ok, Grind, Trace} = ctp:format(#{format => none, sort => call_time}),
     %io:format("~p~n", [lists:sublist(Grind, 1, 5)]),
@@ -49,15 +53,14 @@ basic(Config) when is_list(Config) ->
 
 progress_printer() ->
     receive
-        {trace_info, Done, Total, _} when Done rem 20 == 0->
-            io:format(" ~b/~b ", [Done, Total]),
+        {Step, 1, _, _} ->
+            io:format("~s started ", [Step]),
             progress_printer();
-        {trace_info, Done, Done, _} ->
-            io:format("Trace complete~n"),
-            ok;
-        {export, Done, Done, _} ->
-            io:format("Export complete~n"),
-            ok;
+        {_Step, Done, Total, _} when Done rem 20 == 0->
+            io:format("~b/~b ", [Done, Total]),
+            progress_printer();
+        {_Step, Done, Done, _} ->
+            io:format(" complete.~n");
         _ ->
             progress_printer()
     end.
@@ -67,5 +70,5 @@ do_anything(C, N) when C rem 1000 == 0 -> do_anything(C-1, rand:uniform(C) + N);
 do_anything(C, N) -> do_anything(C-1, N).
 
 do_other(0, _) -> ok;
-do_other(C, N) when C rem 10 == 0 -> io:format(".~b.", [N]);
+do_other(C, N) when C rem 10 == 0 -> io_lib:format(".~b.", [N]);
 do_other(C, N) -> do_other(C-1, N).
