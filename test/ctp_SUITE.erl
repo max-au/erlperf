@@ -12,7 +12,7 @@
 -include_lib("common_test/include/ct.hrl").
 
 -export([all/0, suite/0]).
--export([basic/1]).
+-export([basic/1, extended/1, more/1]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -22,10 +22,20 @@ all() ->
     [basic].
 
 basic(Config) when is_list(Config) ->
-    %
     spawn(fun () -> do_anything(1000, 1000) end),
-    SampleSet = ctp:sample(all, 500, [{ctp_SUITE, '_', '_'}], spawn(fun progress_printer/0)),
-    length(maps:get(undefined, SampleSet)) > 10,
+    %_Data = ctp:export_callgrind(ctp:trace(500), "/tmp/callgrind.001"),
+    Trace = ctp:sample(all, 500, [{?MODULE, '_', '_'}], silent),
+    %io:format("~s~n", [Data]),
+    io:format("~p~n", [Trace]).
+
+extended(Config) when is_list(Config) ->
+    spawn(fun () -> do_anything(1000, 1000) end),
+    Data = ctp:time(500),
+    io:format("~p~n", [Data]).
+
+more(_Config) ->
+    %SampleSet = ctp:sample(all, 500, [{ctp_SUITE, '_', '_'}], spawn(fun progress_printer/0)),
+    %length(maps:get(undefined, SampleSet)) > 10,
     % ctp:run(all, 50),
     {ok, _} = ctp:start(),
     % start rand() module - otherwise we must handle on_load

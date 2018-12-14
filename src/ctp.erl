@@ -11,8 +11,18 @@
 
 -behaviour(gen_server).
 
-%% API
+%% Simple (immediate) API
+-export([
+    time/1,
+    time/4,
+    trace/1,
+    trace/4,
+    sample/4,
+    replay/1,
+    export_callgrind/2
+]).
 
+%% gen_server API
 -export([
     start_trace/0,
     start_trace/1,
@@ -20,10 +30,7 @@
     collect/0,
     collect/1,
     format/0,
-    format/1,
-    sample/4,
-    run/4,
-    replay/1
+    format/1
 ]).
 
 %% Generic start/stop API
@@ -52,6 +59,70 @@
 
 %%%===================================================================
 %%% API
+
+time(TimeMs) ->
+    time(all, TimeMs, [{'_', '_', '_'}], silent).
+
+time(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
+    [erlang:trace_pattern(MFA, true, [local, call_time]) || MFA <- MFAList],
+    erlang:trace(PidPortSpec, true, [silent, call]),
+    receive after TimeMs -> ok end,
+    erlang:trace(PidPortSpec, false, [call]),
+    Data = collect_impl(undefined, Progress),
+    erlang:trace_pattern({'_', '_', '_'}, false, [local, call_time]),
+    process_callers(Data, #{}).
+
+trace(TimeMs) ->
+    trace(all, TimeMs, [{'_', '_', '_'}], silent).
+
+trace(PidPortSpec, TimeMs, MFAList, Progress) ->
+    TracerPid = spawn(fun tracer/0),
+    TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
+    [erlang:trace_pattern(MFA, TraceSpec, [local, call_time]) || MFA <- MFAList],
+    erlang:trace(PidPortSpec, true, [arity, call, {tracer, TracerPid}]),
+    receive after TimeMs -> ok end,
+    erlang:trace(PidPortSpec, false, [call]),
+    Data = collect_impl(TracerPid, Progress),
+    erlang:trace_pattern({'_', '_', '_'}, false, [local, call_time]),
+    {Counts, #{}} = fetch_trace(TracerPid, Progress, infinity),
+    Callers = collect_callers(Counts),
+    process_callers(Data, Callers).
+
+sample(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
+    TracerPid = spawn(fun tracer/0),
+    TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
+    [erlang:trace_pattern(MFA, TraceSpec, [local]) || MFA <- MFAList],
+    erlang:trace(PidPortSpec, true, [call, {tracer, TracerPid}]),
+    receive after TimeMs -> ok end,
+    erlang:trace(PidPortSpec, false, [call]),
+    {[], Samples} = fetch_trace(TracerPid, Progress, infinity),
+    Samples.
+
+replay(Filename) when is_list(Filename) ->
+    {ok, Bin} = file:read_file(Filename),
+    Map = binary_to_term(Bin),
+    true = is_map(Map),
+    replay(Map);
+replay(Map) when is_map(Map) ->
+    Calls = lists:append(maps:values(Map)),
+    timer:tc(lists:foreach(fun ({M,F,A}) -> erlang:apply(M,F,A) end, Calls)).
+
+export_callgrind(Data, Filename) ->
+    % build a large iolist, write it down
+    Lines = lists:map(fun ({Mod, Funs}) ->
+        [io_lib:format("fl=~s\n", [Mod]), lists:map(fun ({F,A,C,Us,Calls}) ->
+            Called = [io_lib:format("cfl=~s\ncfn=~s:~b\ncalls=~b 1\n1 1 1\n", [CM, CF, CA, CC]) || {CM,CF,CA,CC} <- Calls],
+            io_lib:format("fn=~s/~b\n1 ~b ~b\n", [F,A,Us,C]) ++ Called;
+            ({F,A,C,Us}) ->
+                io_lib:format("fn=~s/~b\n1 ~b ~b\n", [F,A,Us,C])
+                                                    end, Funs)]
+                      end, Data),
+    Binary = iolist_to_binary([<<"# callgrind format\nevents: CallTime Calls\n\n">> | Lines]),
+    file:write_file(Filename, Binary),
+    Binary.
+
+%%%===================================================================
+%%% gen_server API
 %%%===================================================================
 start_trace() ->
     start_trace(#{}).
@@ -76,33 +147,6 @@ format() ->
 format(Options0) ->
     Options = maps:merge(#{sort => none, format => callgrind, progress => undefined}, Options0),
     gen_server:call(?MODULE, {format, Options}, infinity).
-
-sample(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
-    % do everything in-place, don't start profiler
-    TracerPid = spawn(fun tracer/0),
-    TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
-    [erlang:trace_pattern(MFA, TraceSpec, [local]) || MFA <- MFAList],
-    erlang:trace(PidPortSpec, true, [call, {tracer, TracerPid}]),
-    receive after TimeMs -> ok end, % this is just sleep(TimeMs)
-    erlang:trace(PidPortSpec, false, [call]),
-    {[], Samples} = fetch_trace(TracerPid, Progress, infinity),
-    Samples.
-
-run(PidPortSpec, TimeMs, TraceOptions, CollectOptions) ->
-    start_trace(maps:merge(#{spec => PidPortSpec}, TraceOptions)),
-    receive after TimeMs -> ok end, % this is just sleep(TimeMs)
-    stop_trace(),
-    ok = collect(CollectOptions),
-    format(CollectOptions).
-
-replay(Filename) when is_list(Filename) ->
-    {ok, Bin} = file:read_file(Filename),
-    Map = binary_to_term(Bin),
-    true = is_map(Map),
-    replay(Map);
-replay(Map) when is_map(Map) ->
-    Calls = lists:append(maps:values(Map)),
-    timer:tc(lists:foreach(fun ({M,F,A}) -> erlang:apply(M,F,A) end, Calls)).
 
 %%%===================================================================
 %%% Generic start/stop API
@@ -215,12 +259,7 @@ handle_call({collect, _}, _From, #state{tracing = true} = State) ->
     {reply, {error, tracing}, State};
 
 handle_call({collect, #{progress := Progress}}, _From, #state{tracing = false, tracer = Tracer} = State) ->
-    {ok, Data} = pmap(
-        [{'$system', undefined} | code:all_loaded()],
-        Tracer,
-        fun trace_time/2,
-        {Progress, trace_info},
-        infinity),
+    Data = collect_impl(Tracer, Progress),
     erlang:trace_pattern({'_', '_', '_'}, false, [local, call_time]),
     % request data from tracer (ask for Progress too!)
     Samples = fetch_trace(Tracer, Progress, infinity),
@@ -380,6 +419,15 @@ gather(Workers, {Message, Done, Total, PrState} = Progress, Timeout, Acc) ->
         timeout
     end.
 
+collect_impl(Tracer, Progress) ->
+    {ok, Data} = pmap(
+        [{'$system', undefined} | code:all_loaded()],
+        Tracer,
+        fun trace_time/2,
+        {Progress, trace_info},
+        infinity),
+    Data.
+
 trace_time({'$system', _}, Tracer) ->
     Map = lists:foldl(fun ({M, F, A}, Acc) ->
         maps:update_with(M, fun (L) -> [{F, A} | L] end, [], Acc)
@@ -479,6 +527,9 @@ report_progress({Progress, Message}, Done, Total, PrState) when is_function(Prog
 report_progress({Progress, Message}, Done, Total, PrState) when is_pid(Progress) ->
     Progress ! {Message, Done, Total, PrState};
 
+% silent progress printer
+report_progress({silent, _}, _, _, State) ->
+    State;
 % default progress printer
 report_progress({undefined, _}, Done, Done, _) ->
     io:format(group_leader(), " complete.~n", []),
@@ -520,3 +571,19 @@ fetch_trace(TracerPid, Progress, Timeout) when is_pid(TracerPid) ->
     wait_for_data(TracerPid, Progress, undefined, 0, tracer_qlen(TracerPid), Timeout);
 fetch_trace(_, _, _) ->
     undefined.
+
+
+% collate: Data [{Module, [Fun,Arity,Count,Sec,Usec]}] === {erl_prim_loader,[{debug,2,0,0},
+%   and -> {M,F,Arity} => {M,F,Arity,Count} === #{{ctp,trace,4} => [{erlang,trace,3,2}],
+process_callers(Data, Callers) ->
+    lists:filtermap(fun ({Mod, Funs}) ->
+        case lists:filtermap(
+            fun ({_,_,0,0}) ->
+                false;
+                ({F,Arity,C,Us}) ->
+                    {true, {F,Arity,C,Us,maps:get({Mod,F,Arity}, Callers, [])}}
+            end, Funs) of
+            [] -> false;
+            Other -> {true, {Mod, Other}}
+        end
+                    end, lists:append(Data)).
