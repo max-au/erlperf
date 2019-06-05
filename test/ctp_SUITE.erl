@@ -1,22 +1,21 @@
 %%%-------------------------------------------------------------------
-%%% @author dane
-%%% @copyright (C) 2018, <COMPANY>
+%%% @author Maxim Fedorov <maximfca@gmail.com>
+%%% @copyright (c) 2019 Maxim Fedorov
 %%% @doc
-%%%
+%%%     Tests ctp
 %%% @end
-%%% Created : 10. Dec 2018 09:19
-%%%-------------------------------------------------------------------
+%%% -------------------------------------------------------------------
+
 -module(ctp_SUITE).
--author("dane").
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, suite/0]).
 -export([basic/1, extended/1, more/1]).
 
 suite() ->
-    [{ct_hooks,[ts_install_cth]},
-        {timetrap,{seconds,60}}].
+    [{timetrap,{seconds,60}}].
 
 all() ->
     [basic].
