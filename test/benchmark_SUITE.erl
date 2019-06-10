@@ -6,7 +6,7 @@
 %%% @end
 %%% -------------------------------------------------------------------
 
--module(erlperf_SUITE).
+-module(benchmark_SUITE).
 
 %% Common Test headers
 -include_lib("common_test/include/ct.hrl").
@@ -47,7 +47,8 @@ groups() ->
             code, code_fun, code_fun1,
             mfa_init, mfa_fun_init,
             code_gen_server,
-            mfa_concurrency, mfa_no_concurrency]},
+            mfa_concurrency, mfa_no_concurrency,
+            code_extra_node]},
         {squeeze, [], [
             mfa_squeeze
         ]}
@@ -133,11 +134,12 @@ code_gen_server(_Config) ->
     C = benchmark:run({
         "run(Pid) -> gen_server:call(Pid, {sleep, 1}).",
         #{
-            init => "erlperf_SUITE:start_link().",
+            init => "Pid = " ++ atom_to_list(?MODULE) ++ ":start_link(), register(server, Pid), Pid.",
             init_runner => "local(Pid) when is_pid(Pid) -> Pid.",
             done => "stop(Pid) -> gen_server:stop(Pid)."
         }
     }),
+    ?assertEqual(undefined, whereis(server)),
     ?assert(C > 250 andalso C < 1101).
 
 mfa_concurrency(_Config) ->
@@ -156,6 +158,18 @@ mfa_no_concurrency(_Config) ->
         },
         #{concurrency => 4}),
     ?assert(C > 250 andalso C < 1101).
+
+code_extra_node(_Config) ->
+    C = benchmark:run(
+        {
+            "{ok, Timer} = application:get_env(kernel, test), timer:sleep(Timer).",
+            #{
+                init => "application:set_env(kernel, test, 1)."
+            }
+        },
+        #{concurrency => 2, isolation => node}),
+    ?assertEqual(undefined, application:get_env(kernel, test)),
+    ?assert(C > 500 andalso C < 2202).
 
 
 mfa_squeeze() ->

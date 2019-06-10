@@ -58,7 +58,7 @@ subscribe(_Config) ->
     history:get(20),
     % start a benchmark and see it running on 1 scheduler
     {ok, Job} = job:start_link({timer, sleep, [10]}),
-    [{Job, _Index, UID}] = monitor:which_jobs(),
+    [{Job, UID}] = monitor:which_jobs(),
     ok = job:set_concurrency(Job, 1),
     % wait for 3 seconds, receive updates
     Total = receive_updates(UID, 0, 3),

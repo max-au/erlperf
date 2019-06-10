@@ -86,8 +86,7 @@ measure(JobId) ->
 %%  by the selected job.
 -spec measure(pid(), pos_integer()) -> non_neg_integer().
 measure(JobId, Interval) ->
-    {ok, {CRef, CInd}} = gen_server:call(JobId, get_counters),
-    measure_impl(CRef, CInd, Interval).
+    measure_impl(gen_server:call(JobId, get_counters), Interval).
 
 %%--------------------------------------------------------------------
 %% Internal definitions
@@ -109,9 +108,8 @@ measure(JobId, Interval) ->
     init_runner_result :: term(),
     %
     workers = [] :: [pid()],
-    % counter reference & index
-    cref :: reference(),
-    cind :: integer()
+    % counter reference (index is always 1)
+    cref :: reference()
 }).
 
 
@@ -119,18 +117,18 @@ measure(JobId, Interval) ->
 %%% gen_server callbacks
 
 init([Code, Hooks]) ->
-    {ok, {CRef, CInd}, UID} = monitor:register_job(self()),
-    true = CRef =/= already_started,
+    CRef = atomics:new(1, []),
+    {ok, UID} = monitor:register_job(self(), CRef),
     State0 = maybe_compile(Code, Hooks, UID),
     IR = call(State0#state.init, undefined),
     erlang:process_flag(trap_exit, true),
-    {ok, State0#state{code = Code, cref = CRef, cind = CInd, init_result = IR}}.
+    {ok, State0#state{code = Code, cref = CRef, init_result = IR}}.
 
 handle_call(info, _From, #state{code = Code} = State) ->
     {reply, {ok, Code, length(State#state.workers)}, State};
 
-handle_call(get_counters, _From, #state{cref = CRef, cind = CInd} = State) ->
-    {reply, {ok, CRef, CInd}, State};
+handle_call(get_counters, _From, #state{cref = CRef} = State) ->
+    {reply, {ok, CRef}, State};
 
 handle_call({set_concurrency, Concurrency}, _From, State) ->
     {reply, ok, State#state{workers = set_concurrency_impl(Concurrency, State)}};
@@ -196,31 +194,31 @@ call(Fun, Arg) when is_function(Fun, 1) ->
     Fun(Arg).
 
 %% Different runners (optimisation, could've used call/2 for it, but - benchmarking!)
-runner(M, F, A, CRef, CInd) ->
+runner(M, F, A, CRef) ->
     erlang:apply(M, F, A),
-    atomics:add(CRef, CInd, 1),
-    runner(M, F, A, CRef, CInd).
+    atomics:add(CRef, 1, 1),
+    runner(M, F, A, CRef).
 
-runner_list(List, CRef, CInd) ->
+runner_list(List, CRef) ->
     _ = [erlang:apply(M, F, A) || {M, F, A} <- List],
-    atomics:add(CRef, CInd, 1),
-    runner_list(List, CRef, CInd).
+    atomics:add(CRef, 1, 1),
+    runner_list(List, CRef).
 
-runner_fun_0(Fun, CRef, CInd) ->
+runner_fun_0(Fun, CRef) ->
     Fun(),
-    atomics:add(CRef, CInd, 1),
-    runner_fun_0(Fun, CRef, CInd).
+    atomics:add(CRef, 1, 1),
+    runner_fun_0(Fun, CRef).
 
-runner_fun_1(Fun, IWR, CRef, CInd) ->
+runner_fun_1(Fun, IWR, CRef) ->
     Fun(IWR),
-    atomics:add(CRef, CInd, 1),
-    runner_fun_1(Fun, IWR, CRef, CInd).
+    atomics:add(CRef, 1, 1),
+    runner_fun_1(Fun, IWR, CRef).
 
 set_concurrency_impl(Concurrency, #state{workers = Workers}) when length(Workers) =:= Concurrency ->
     Workers;
 
 set_concurrency_impl(Concurrency, #state{workers = Workers, init_runner = InitRunner, init_result = IR,
-    runner = Runner, cref = CRef, cind = CInd})
+    runner = Runner, cref = CRef})
     when length(Workers) < Concurrency ->
     Hired = [spawn_link(
         fun () ->
@@ -230,16 +228,16 @@ set_concurrency_impl(Concurrency, #state{workers = Workers, init_runner = InitRu
                 {M, F, A} ->
                     case erlang:function_exported(M, F, length(A)) of
                         true ->
-                            runner(M, F, A, CRef, CInd);
+                            runner(M, F, A, CRef);
                         false ->
-                            runner(M, F, A ++ [IWR], CRef, CInd)
+                            runner(M, F, A ++ [IWR], CRef)
                     end;
                 [{_, _, _} | _] = List ->
-                    runner_list(List, CRef, CInd);
+                    runner_list(List, CRef);
                 Fun when is_function(Fun, 0) ->
-                    runner_fun_0(Fun, CRef, CInd);
+                    runner_fun_0(Fun, CRef);
                 Fun when is_function(Fun, 1) ->
-                    runner_fun_1(Fun, IWR, CRef, CInd)
+                    runner_fun_1(Fun, IWR, CRef)
             end
         end) || _ <- lists:seq(length(Workers) + 1, Concurrency)],
     Workers ++ Hired;
@@ -265,10 +263,10 @@ wait_for_killed([Pid | Tail]) ->
             wait_for_killed(Tail)
     end.
 
-measure_impl(CRef, CInd, Interval) ->
-    Before = atomics:get(CRef, CInd),
+measure_impl(CRef, Interval) ->
+    Before = atomics:get(CRef, 1),
     timer:sleep(Interval),
-    atomics:get(CRef, CInd) - Before.
+    atomics:get(CRef, 1) - Before.
 
 %%%===================================================================
 %%% Compilation primitives

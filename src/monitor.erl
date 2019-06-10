@@ -13,7 +13,7 @@
 %% API
 -export([
     start_link/0,
-    register_job/1,
+    register_job/2,
     which_jobs/0,
     find_job/1
 ]).
@@ -35,10 +35,6 @@
 
 -define(DEFAULT_TICK_INTERVAL_MS, 1000).
 
-% default: max number of concurrent jobs
--define(MAX_JOBS, 256).
-
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -49,13 +45,13 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %% @doc Used by job during initialisation stage. Registers a
-%%  job as running, allocates atomic counter for this job.
--spec register_job(pid()) ->
+%%  job as running, and an atomic counter for that job.
+-spec register_job(pid(), reference()) ->
     {ok, {reference(), non_neg_integer()}} |
     {ok, {already_started, non_neg_integer()}} |
     {error, system_limit}.
-register_job(Pid) ->
-    gen_server:call(?SERVER, {register, Pid}).
+register_job(Pid, CRef) ->
+    gen_server:call(?SERVER, {register, Pid, CRef}).
 
 %% @doc
 %% Returns all currently running jobs
@@ -75,12 +71,8 @@ find_job(UID) ->
 -record(state, {
     % next job receives this ID
     next_id = 1 :: integer(),
-    % limited set of counters managed by one node
-    counters :: reference(),
-    % previously saved counters
-    counters_saved :: tuple(),
     % bi-map of job processes to counters
-    jobs = [] :: [{pid(), CInd :: non_neg_integer(), UID :: integer()}],
+    jobs = [] :: [{pid(), CRef :: reference(), Prev :: integer(), UID :: integer()}],
     % scheduler data saved from last call
     sched_data :: [{pos_integer(), integer(), integer()}],
     % number of normal schedulers
@@ -102,8 +94,6 @@ init([]) ->
     erlang:send_after(Tick, self(), tick),
     % init done
     {ok, #state{
-        counters = atomics:new(?MAX_JOBS, []),
-        counters_saved = list_to_tuple([0 || _ <- lists:seq(1, ?MAX_JOBS)]),
         tick = Tick,
         next_tick = Next + Tick,
         sched_data = lists:sort(erlang:statistics(scheduler_wall_time_all)),
@@ -111,24 +101,19 @@ init([]) ->
         dcpu = erlang:system_info(dirty_cpu_schedulers)}
     }.
 
-handle_call({register, _Pid}, _From, State) when length(State#state.jobs) =:= ?MAX_JOBS ->
-    {reply, {error, system_limit}, State};
-
-handle_call({register, Pid}, _From, #state{jobs = Jobs, next_id = NextId} = State) ->
+handle_call({register, Pid, CRef}, _From, #state{jobs = Jobs, next_id = NextId} = State) ->
     case lists:keyfind(Pid, 1, Jobs) of
         false ->
-            Taken = lists:sort([I || {_, I, _} <- Jobs]),
-            Index = find_slot(Taken, 1),
             monitor(process, Pid),
-            {reply, {ok, {State#state.counters, Index}, NextId},
-                State#state{jobs = [{Pid, Index, NextId} | Jobs],
+            {reply, {ok, NextId},
+                State#state{jobs = [{Pid, CRef, 0, NextId} | Jobs],
                     next_id = NextId + 1}};
-        {Pid, Index} ->
-            {ok, {already_started, Index}}
+        {Pid, _CRef, _, UID} ->
+            {ok, {already_started, UID}}
     end;
 
 handle_call(which_jobs, _From, State) ->
-    {reply, State#state.jobs, State};
+    {reply, [{Pid, UID} || {Pid, _, _, UID} <- State#state.jobs], State};
 
 handle_call(_Request, _From, _State) ->
     error(badarg).
@@ -139,10 +124,7 @@ handle_cast(_Request, _State) ->
 handle_info({'DOWN', _MRef, process, Pid, Reason}, #state{jobs = Jobs} = State) ->
     Reason =/= normal andalso Reason =/= shutdown andalso
         ?LOG_NOTICE("Job ~p exited with ~p", [Pid, Reason]),
-    {value, {Pid, Index, _}, NewBM} = lists:keytake(Pid, 1, Jobs),
-    atomics:put(State#state.counters, Index, 0),
-    CtrSaved = setelement(Index, State#state.counters_saved, 0),
-    {noreply, State#state{jobs = NewBM, counters_saved = CtrSaved}};
+    {noreply, State#state{jobs = lists:keydelete(Pid, 1, Jobs)}};
 handle_info(tick, State) ->
     {noreply, handle_tick(State)};
 handle_info(_Info, _State) ->
@@ -151,18 +133,15 @@ handle_info(_Info, _State) ->
 %%%===================================================================
 %%% Internal functions
 
-handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu,
-    counters = CRef, counters_saved = Saved} = State) ->
+handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
     NewSched = lists:sort(erlang:statistics(scheduler_wall_time_all)),
     {NU, DU, DioU} = fold_normal(Data, NewSched, Normal, Dcpu, 0, 0),
     % add benchmarking info
-    {Jobs, SavedNew} = lists:foldl(
-        fun ({_Pid, CInd, UID}, {J, Save}) ->
-            Cycles = atomics:get(CRef, CInd),
-            Before = element(CInd, Save),
-            SaveNew = setelement(CInd, Save, Cycles),
-            {[{UID, Cycles - Before} | J], SaveNew}
-        end, {[], Saved}, State#state.jobs),
+    {Jobs, UpdatedJobs} = lists:foldl(
+        fun ({Pid, CRef, Prev, UID}, {J, Save}) ->
+            Cycles = atomics:get(CRef, 1),
+            {[{UID, Cycles - Prev} | J], [{Pid, CRef, Cycles, UID} | Save]}
+        end, {[], []}, State#state.jobs),
     %
     Sample = #monitor_sample{
         time = erlang:system_time(millisecond),
@@ -182,7 +161,7 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu,
     %
     NextTick = schedule_send(State#state.next_tick, State#state.tick),
     %
-    State#state{sched_data = NewSched, next_tick = NextTick, counters_saved = SavedNew}.
+    State#state{sched_data = NewSched, next_tick = NextTick, jobs = UpdatedJobs}.
 
 schedule_send(NextTick, Tick) ->
     Now = erlang:system_time(millisecond),
@@ -219,8 +198,3 @@ fold_dirty_io([{N, OldActive, OldTotal} | Old],
     [{N, NewActive, NewTotal} | New], NormalPct, DcpuPct, AccActive, AccTotal) ->
     fold_dirty_io(Old, New, NormalPct, DcpuPct, AccActive + (NewActive - OldActive),
         AccTotal + (NewTotal - OldTotal)).
-
-find_slot([H | T], Index) when H =:= Index ->
-    find_slot(T, Index + 1);
-find_slot(_, Index) ->
-    Index.

@@ -2,12 +2,12 @@
 %%% @author Maxim Fedorov <maximfca@gmail.com>
 %%% @copyright (C) 2019, Maxim Fedorov
 %%% @doc
-%%%   Saves monitor history.
+%%%   Saves benchmarks for future use (database).
 %%% @end
--module(history).
+-module(benchmark_store).
 -author("maximfca@gmail.com").
 
--behaviour(gen_server).
+%% API
 
 %% API
 -export([
@@ -23,8 +23,32 @@
     handle_info/2
 ]).
 
+%%%===================================================================
+%%% Persistence API - NIY
 
--include("monitor.hrl").
+-record(erlperf_callable, {
+    id :: integer(),
+    code :: job:callable()
+}).
+
+-record(erlperf_benchmark, {
+    id :: integer(),
+    name = [] :: string(),
+    description = [] :: string(),
+    runner,
+    init,
+    init_runner,
+    done
+}).
+
+-record(erlperf_result, {
+    id :: integer(),
+    benchmark,
+    start,
+    finish,
+    system_info,
+    throughput
+}).
 
 -define(SERVER, ?MODULE).
 
@@ -75,13 +99,6 @@ handle_call(_Request, _From, _State) ->
 
 handle_cast(_Request, _State) ->
     error(badarg).
-
-handle_info(#monitor_sample{} = Sample, #state{length = Len, max_length = MaxLen, history = History} = State) when Len >= MaxLen ->
-    handle_info(Sample,
-        State#state{length = Len - 1, max_length = MaxLen, history = queue:drop(History)});
-
-handle_info(#monitor_sample{} = Sample, #state{length = Len, history = History} = State) ->
-    {noreply, State#state{history = queue:in(Sample, History), length = Len + 1}};
 
 handle_info(_Info, _State) ->
     error(badarg).
