@@ -15,6 +15,8 @@
     init/1
 ]).
 
+-include("monitor.hrl").
+
 -define(SERVER, ?MODULE).
 
 start_link() ->
@@ -22,39 +24,24 @@ start_link() ->
 
 init([]) ->
     SupFlags = #{strategy => rest_for_one,
-                 intensity => 5,
-                 period => 120},
-    Optional = case application:get_env(file_log) of
-                   {ok, Filename} when is_list(Filename) ->
-                       [
-                           %% file log, if asked for
-                           #{id => file_log,
-                               start => {file_log, start_link, [Filename]},
-                               modules => [file_log]}
-                       ];
-                   _ ->
-                       []
-               end,
+                 intensity => 2,
+                 period => 60},
     ChildSpecs = [
-        % event bus for applications willing to receive monitoring updates
-        % suffers from all traditional gen_event problems
-        #{id => system_event,
-            start => {gen_event, start_link, [{local, system_event}]},
+        % event bus for job-related changes, started-stopped jobs
+        #{id => ?JOB_EVENT,
+            start => {gen_event, start_link, [{local, ?JOB_EVENT}]},
             modules => dynamic},
-        % system monitor: collects all jobs statistical data to
-        %   fire events, depends on event but to be alive
-        #{id => monitor,
-            start => {monitor, start_link, []},
-            modules => [monitor]},
-        %% history collection
-        #{id => history,
-            start => {history, start_link, []},
-            modules => [history]},
-        % supervisor for all concurrently running jobs. Uses atomics
-        %   supplied by monitor
-        #{id => job_sup,
-            start => {job_sup, start_link, []},
+
+        % supervisor for all concurrently running jobs
+        #{id => ep_job_sup,
+            start => {ep_job_sup, start_link, []},
             type => supervisor,
-            modules => [job_sup]}
-    ],
-    {ok, {SupFlags, ChildSpecs ++ Optional}}.
+            modules => [ep_job_sup]},
+
+        % supervisor for node & cluster monitoring
+        #{id => ep_monitor_sup,
+            start => {ep_monitor_sup, start_link, []},
+            type => supervisor,
+            modules => [ep_monitor_sup]}
+        ],
+    {ok, {SupFlags, ChildSpecs}}.

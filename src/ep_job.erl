@@ -5,18 +5,19 @@
 %%%   Job runner, taking care of init/done, workers added and
 %%%     removed.
 %%% @end
--module(job).
+-module(ep_job).
 -author("maximfca@gmail.com").
 
 -behaviour(gen_server).
 
 %% Job API
 -export([
+    start/1,
     start_link/1,
+    stop/1,
     set_concurrency/2,
     info/1,
-    measure/1,
-    measure/2
+    get_counters/1
 ]).
 
 %% gen_server callbacks
@@ -25,8 +26,7 @@
     handle_call/3,
     handle_cast/2,
     handle_info/2,
-    terminate/2,
-    code_change/3
+    terminate/2
 ]).
 
 %% Job: a simple supervisor-type process. Not an actual supervisor because
@@ -40,26 +40,37 @@
 %% Callable: one or more MFArgs, or a function object, or source code.
 -type callable() :: mfargs() | [mfargs()] | fun() | fun((term()) -> term()) | string().
 
-%% Setup/teardown hooks.
--type init_hooks() :: #{
-    init => job:callable(),
-    init_runner => job:callable(),
-    done  => job:callable()
+%% Extended "code" variant: runner code, setup/teardown hooks, additional parameters
+%%  used to save/load job.
+-type code_map() :: #{
+    runner := callable(),
+    init => callable(),
+    init_runner => callable(),
+    done  => callable()
 }.
 
 %% Code: callable, callable with hooks
--type code() :: callable() | {callable(), init_hooks()}.
+-type code() :: callable() | code_map().
 
 %%--------------------------------------------------------------------
 %% @doc
+%% Starts the benchmark instance using default (ep_job_sup) supervisor.
+-spec start(code()) -> {ok, Pid :: pid()} | {error, {already_started, pid()}} | {error, Reason :: term()}.
+start(Code) when is_map(Code); tuple_size(Code) =:= 3; is_function(Code); is_list(Code) ->
+    supervisor:start_child(ep_job_sup, [Code]).
+
+%% @doc
 %% Starts the benchmark instance and links it to caller.
 %% Job starts with no workers, use set_concurrency/2 to start some.
--spec(start_link(code()) ->
-    {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-start_link({Runner, Hooks}) ->
-    gen_server:start_link(?MODULE, [Runner, Hooks], []);
-start_link(Runner) ->
-    gen_server:start_link(?MODULE, [Runner, #{}], []).
+-spec start_link(code()) -> {ok, Pid :: pid()} | {error, {already_started, pid()}} | {error, Reason :: term()}.
+start_link(Code) when is_map(Code); tuple_size(Code) =:= 3; is_function(Code); is_list(Code) ->
+    gen_server:start_link(?MODULE, Code, []).
+
+%% @doc
+%% Stops the benchmark instance (via supervisor).
+-spec stop(pid()) -> ok.
+stop(JobId) ->
+    supervisor:terminate_child(ep_job_sup, JobId).
 
 %% @doc
 %% Change concurrency setting for this job.
@@ -75,23 +86,16 @@ set_concurrency(JobId, Concurrency) ->
 info(JobId) ->
     gen_server:call(JobId, info).
 
-%% @doc
-%% Sleeps for 1 second, and reports amount of cycles done by the selected job.
--spec measure(pid()) -> non_neg_integer().
-measure(JobId) ->
-    measure(JobId, 1000).
-
-%% @doc
-%% Sleeps for Interval milliseconds, and reports number of cycles done
-%%  by the selected job.
--spec measure(pid(), pos_integer()) -> non_neg_integer().
-measure(JobId, Interval) ->
-    measure_impl(gen_server:call(JobId, get_counters), Interval).
+-spec get_counters(pid()) -> reference().
+get_counters(JobId) ->
+    gen_server:call(JobId, get_counters).
 
 %%--------------------------------------------------------------------
 %% Internal definitions
 
 -include_lib("kernel/include/logger.hrl").
+
+-include("monitor.hrl").
 
 -record(state, {
     % original spec
@@ -116,19 +120,19 @@ measure(JobId, Interval) ->
 %%%===================================================================
 %%% gen_server callbacks
 
-init([Code, Hooks]) ->
+init(Code) ->
     CRef = atomics:new(1, []),
-    {ok, UID} = monitor:register_job(self(), CRef),
-    State0 = maybe_compile(Code, Hooks, UID),
+    State0 = maybe_compile(Code),
     IR = call(State0#state.init, undefined),
     erlang:process_flag(trap_exit, true),
+    gen_event:notify(?JOB_EVENT, {started, self(), Code, CRef}),
     {ok, State0#state{code = Code, cref = CRef, init_result = IR}}.
 
 handle_call(info, _From, #state{code = Code} = State) ->
     {reply, {ok, Code, length(State#state.workers)}, State};
 
 handle_call(get_counters, _From, #state{cref = CRef} = State) ->
-    {reply, {ok, CRef}, State};
+    {reply, CRef, State};
 
 handle_call({set_concurrency, Concurrency}, _From, State) ->
     {reply, ok, State#state{workers = set_concurrency_impl(Concurrency, State)}};
@@ -136,8 +140,8 @@ handle_call({set_concurrency, Concurrency}, _From, State) ->
 handle_call(_Request, _From, _State) ->
     error(badarg).
 
-handle_cast(_Request, State) ->
-    {noreply, State}.
+handle_cast(_Request, _State) ->
+    error(badarg).
 
 handle_info({'EXIT', Worker, Reason}, State) when Reason =:= shutdown; Reason =:= normal ->
     {noreply, State#state{workers = lists:delete(Worker, State#state.workers)}};
@@ -151,7 +155,6 @@ handle_info(_Info, _State) ->
 terminate(_Reason, #state{done = Done, init_result = IR, module = Mod} = State) ->
     % terminate all workers first
     set_concurrency_impl(0, State),
-    %
     call(Done, IR),
     if Mod =/= [] ->
         _ = code:purge(Mod),
@@ -161,9 +164,6 @@ terminate(_Reason, #state{done = Done, init_result = IR, module = Mod} = State) 
         true ->
             ok
     end.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
 
 %%%===================================================================
 %%% Internal: callable & runner implementation
@@ -245,11 +245,11 @@ set_concurrency_impl(Concurrency, #state{workers = Workers, init_runner = InitRu
 set_concurrency_impl(Concurrency, #state{workers = Workers}) ->
     {Remaining, ToFire} =
         if Concurrency > 0 ->
-                lists:split(Workers, Concurrency);
+                lists:split(Concurrency, Workers);
             true ->
                 {[], Workers}
         end,
-    [exit(Pid, kill) || Pid <- ToFire],
+    [exit(Pid, shutdown) || Pid <- ToFire],
     % monitors procs die
     wait_for_killed(ToFire),
     %
@@ -263,11 +263,6 @@ wait_for_killed([Pid | Tail]) ->
             wait_for_killed(Tail)
     end.
 
-measure_impl(CRef, Interval) ->
-    Before = atomics:get(CRef, 1),
-    timer:sleep(Interval),
-    atomics:get(CRef, 1) - Before.
-
 %%%===================================================================
 %%% Compilation primitives
 %%%===================================================================
@@ -275,9 +270,15 @@ measure_impl(CRef, Interval) ->
 -define(IS_SOURCE(Text), is_list(Text), not is_tuple(hd(Text)), not is_function(hd(Text))).
 
 ensure_loaded({M, _, _} = MFA) when is_atom(M) ->
-    {module, M} = code:ensure_loaded(M),
-    MFA;
+    case code:ensure_loaded(M) of
+        {module, M} ->
+            MFA;
+        {error, nofile} ->
+            error({module_not_found, M})
+    end;
 ensure_loaded([]) ->
+    error("empty callable");
+ensure_loaded({[]}) ->
     error("empty callable");
 ensure_loaded(Other) when ?IS_SOURCE(Other) ->
     error("cannot mix source and non-source forms");
@@ -294,10 +295,14 @@ export(DefaultName, Text) ->
             {Name, Arity, Form};
         {error, _} ->
             % try if it's an expr
-            {ok, Clauses} = erl_parse:parse_exprs(Scan),
-            Form = {function, 1, DefaultName, 0,
-                [{clause,1,[],[], Clauses}]},
-            {DefaultName, 0, Form}
+            case erl_parse:parse_exprs(Scan) of
+                {ok, Clauses} ->
+                    Form = {function, 1, DefaultName, 0,
+                        [{clause,1,[],[], Clauses}]},
+                    {DefaultName, 0, Form};
+                Error ->
+                    error(Error)
+            end
     end.
 
 try_export(Name, Map) when is_map_key(Name, Map) ->
@@ -310,8 +315,19 @@ ensure_callable(_Mod, undefined) ->
 ensure_callable(Mod, {Name, _, _}) ->
     {Mod, Name, []}.
 
-maybe_compile(Text, Hooks, ID) when ?IS_SOURCE(Text) ->
-    Mod = list_to_atom("job_" ++ integer_to_list(ID)),
+module_name() ->
+    list_to_atom(lists:flatten(io_lib:format("job_~p_~p", [node(), self()]))).
+
+maybe_compile(#{runner := Runner} = Code) ->
+    maybe_compile(Runner, maps:remove(runner, Code));
+
+maybe_compile(Code) when not is_map(Code) ->
+    maybe_compile(Code, #{}).
+
+maybe_compile(Text, Hooks) when ?IS_SOURCE(Text) ->
+    %
+    Mod = module_name(),
+    %
     ModForm = {attribute, 1, module, Mod},
     % form source code
     {RunnerName, _, _} = Runner = export(runner, Text),
@@ -331,6 +347,7 @@ maybe_compile(Text, Hooks, ID) when ?IS_SOURCE(Text) ->
     {ok, App, Bin} = compile:forms(AllForms),
     {module, Mod} = code:load_binary(App, atom_to_list(Mod), Bin),
     #state{
+        module = Mod,
         runner = {Mod, RunnerName, []},
         init = ensure_callable(Mod, Init),
         done = ensure_callable(Mod, Done),
@@ -338,7 +355,7 @@ maybe_compile(Text, Hooks, ID) when ?IS_SOURCE(Text) ->
     };
 
 %% No compilation required
-maybe_compile(Runner, Hooks, _) ->
+maybe_compile(Runner, Hooks) ->
     #state{
         runner = ensure_loaded(Runner),
         init = ensure_loaded(maps:get(init, Hooks, undefined)),

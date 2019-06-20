@@ -12,25 +12,35 @@
 -include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, suite/0]).
--export([basic/1, extended/1, more/1]).
+-export([time/1, trace/1, record/1, extended/1, more/1]).
 
 suite() ->
-    [{timetrap,{seconds,60}}].
+    [{timetrap, {seconds,30}}].
 
 all() ->
-    [basic].
+    [time, trace, record, extended, more].
 
-basic(Config) when is_list(Config) ->
+time(_Config) ->
+    ok.
+
+trace(_Config) ->
+    ok.
+
+record(Config) when is_list(Config) ->
     spawn(fun () -> do_anything(1000, 1000) end),
-    %_Data = ctp:export_callgrind(ctp:trace(500), "/tmp/callgrind.001"),
     Trace = ctp:sample(all, 500, [{?MODULE, '_', '_'}], silent),
-    %io:format("~s~n", [Data]),
-    io:format("~p~n", [Trace]).
+    Trace2 = ctp:record(500, {?MODULE, '_', '_'}),
+    %?assert(ct:pal("~p", [Trace]),
+    Data = ctp:format_callgrind(ctp:trace(500)),
+    %ct:pal("~p", [Data]),
+    ?assert(is_map(Trace)),
+    ?assert(is_map(Trace2)),
+    ?assert(is_binary(Data)).
 
 extended(Config) when is_list(Config) ->
     spawn(fun () -> do_anything(1000, 1000) end),
     Data = ctp:time(500),
-    io:format("~p~n", [Data]).
+    ?assert(is_list(Data)).
 
 more(_Config) ->
     %SampleSet = ctp:sample(all, 500, [{ctp_SUITE, '_', '_'}], spawn(fun progress_printer/0)),

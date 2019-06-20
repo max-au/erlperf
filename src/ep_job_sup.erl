@@ -5,25 +5,17 @@
 %%% @end
 %%%-------------------------------------------------------------------
 
--module(job_sup).
+-module(ep_job_sup).
 
 -behaviour(supervisor).
 
 -export([
-    start_job/1,
-    stop_job/1,
     start_link/0,
     init/1
 ]).
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
-
-start_job(Code) ->
-    supervisor:start_child(?MODULE, [Code]).
-
-stop_job(Job) ->
-    supervisor:terminate_child(?MODULE, Job).
 
 init([]) ->
     {ok, {
@@ -32,8 +24,8 @@ init([]) ->
             period => 60},
         [
             #{
-                id => job,
-                start => {job, start_link, []},
-                modules => [job]
+                id => ep_job,
+                start => {ep_job, start_link, []},
+                modules => [ep_job]
             }
         ]}}.

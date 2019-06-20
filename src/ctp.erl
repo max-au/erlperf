@@ -1,25 +1,24 @@
 %%%-------------------------------------------------------------------
-%%% @author Maxim Fedorov <maxim@photokid.com.au>
-%%% @copyright Maxim Fedorov
+%%% @author Maxim Fedorov <maximfca@gmail.com>
+%%% @copyright (C) 2019, Maxim Fedorov
 %%% @doc
-%%%
+%%%   Call time profiler, and a series of helper functions.
 %%% @end
-%%% Created : 10. Dec 2018 09:16
-%%%-------------------------------------------------------------------
 -module(ctp).
--author("dane").
+-author("maximfca@gmail.com").
 
 -behaviour(gen_server).
 
-%% Simple (immediate) API
+%% Simple (immediate) API, useful for benchmarking process
 -export([
     time/1,
     time/4,
     trace/1,
     trace/4,
+    record/2,
     sample/4,
     replay/1,
-    export_callgrind/2
+    format_callgrind/1
 ]).
 
 %% gen_server API
@@ -38,32 +37,61 @@
     start/0,
     start_link/0,
     stop/0,
-    stop/1]).
+    stop/1
+]).
 
 %% gen_server callbacks
--export([init/1,
+-export([
+    init/1,
     handle_call/3,
     handle_cast/2,
     handle_info/2,
-    terminate/2,
-    code_change/3]).
-
--record(state, {
-    tracing = false :: boolean(),
-    tracer = undefined :: undefined | pid(),
-    call_time = undefined :: undefined | [{module(), [{{Fun :: atom(), non_neg_integer()},
-        Count :: non_neg_integer(), Time :: non_neg_integer()}]}], % {ets, [{internal_select_delete,2,1,1}, {internal_delete_all,2,3,4}]}
-    samples = undefined :: undefined | [term()],
-    traced_procs :: term()
-}).
+    terminate/2
+]).
 
 %%%===================================================================
 %%% API
 
-time(TimeMs) ->
-    time(all, TimeMs, [{'_', '_', '_'}], silent).
+%% Trace specification, used for erlang:trace/3 call.
+%% @see erlang:trace/3
+-type pid_port_spec() :: pid() | port() | all | processes | ports|
+    existing | existing_processes | existing_ports |
+    new | new_processes | new_ports.
 
-time(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
+%% Caller, MFA + how many times this called called function under tracing.
+-type caller() :: {
+    CallerMod :: module(),
+    CallerFun :: atom(),
+    CallerArity :: non_neg_integer(),
+    CallerCount :: pos_integer()
+}.
+
+%% Progress callback: MF & initial state.
+-type progress_callback() :: {module(), atom(), term()}.
+
+%% Result of time/1,4 call.
+-type module_time() :: {Module :: module(),
+    [{
+        Fun :: atom(), Arity :: non_neg_integer(),
+        Count :: non_neg_integer(), TimeMs :: non_neg_integer()
+    }]}.
+
+
+%% @doc
+%% Performs call time tracing for all processes, all modules and all functions.
+%% @param TimeMs milliseconds to wait.
+%% Does not collect any call stacks. Fast enough to be used even on highly-loaded
+%%  systems running thousands of processes.
+-spec time(TimeMs :: non_neg_integer()) -> [module_time()].
+time(TimeMs) ->
+    time(TimeMs, all, [{'_', '_', '_'}], silent).
+
+%% @doc
+%% Performs call time tracing for specific processes, modules or functions.
+%%  Accepts a progress report callback.
+-spec time(TimeMs :: non_neg_integer(), pid_port_spec(), erlang:trace_pattern_mfa(),
+    progress_callback()) -> [module_time()].
+time(TimeMs, PidPortSpec, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
     [erlang:trace_pattern(MFA, true, [local, call_time]) || MFA <- MFAList],
     erlang:trace(PidPortSpec, true, [silent, call]),
     receive after TimeMs -> ok end,
@@ -72,11 +100,29 @@ time(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(h
     erlang:trace_pattern({'_', '_', '_'}, false, [local, call_time]),
     process_callers(Data, #{}).
 
-trace(TimeMs) ->
-    trace(all, TimeMs, [{'_', '_', '_'}], silent).
+%% Result of trace/1,4 call.
+-type module_trace() :: {Module :: module(),
+    [{
+        Fun :: atom(), Arity :: non_neg_integer(),
+        Count :: non_neg_integer(), TimeMs :: non_neg_integer(),
+        [caller()]
+    }]}.
 
-trace(PidPortSpec, TimeMs, MFAList, Progress) ->
-    TracerPid = spawn(fun tracer/0),
+%% @doc
+%% Performs call time tracing for all processes, all modules and all functions, and
+%%  also collects information about the caller.
+%%  This is considerably slower than using time/1, because actual tracing is being used.
+%% @param TimeMs milliseconds to wait
+-spec trace(TimeMs :: non_neg_integer()) -> [module_trace()].
+trace(TimeMs) ->
+    trace(TimeMs, all, [{'_', '_', '_'}], silent).
+
+%% @doc
+%% Performs call time tracing, and collects information about the caller.
+-spec trace(TimeMs :: non_neg_integer(), pid_port_spec(), erlang:trace_pattern_mfa(),
+    progress_callback()) -> [module_trace()].
+trace(TimeMs, PidPortSpec, MFAList, Progress) ->
+    TracerPid = spawn_link(fun tracer/0),
     TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
     [erlang:trace_pattern(MFA, TraceSpec, [local, call_time]) || MFA <- MFAList],
     erlang:trace(PidPortSpec, true, [arity, call, {tracer, TracerPid}]),
@@ -88,13 +134,35 @@ trace(PidPortSpec, TimeMs, MFAList, Progress) ->
     Callers = collect_callers(Counts),
     process_callers(Data, Callers).
 
+%% @doc
+%% Traces calls to MFA and records arguments passed.
+-spec record(TimeMs :: non_neg_integer(),
+    {Mod :: module() | '_', Fun :: atom() | '_', Arity :: non_neg_integer() | '_'}) -> [[term()]] | not_found.
+record(TimeMs, MFA) ->
+    TracerPid = spawn_link(fun tracer/0),
+    TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
+    case erlang:trace_pattern(MFA, TraceSpec, [local]) of
+        0 ->
+            erlang:error(not_found);
+        _Trc ->
+            erlang:trace(all, true, [call, {tracer, TracerPid}]),
+            receive after TimeMs -> ok end,
+            erlang:trace(all, false, [call]),
+            erlang:trace_pattern({'_', '_', '_'}, false, [local]),
+            {[], Samples} = fetch_trace(TracerPid, undefined, infinity),
+            Samples
+    end.
+
+%% @doc
+%% Records samples of calls to any function in MFA list passed.
 sample(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size(hd(MFAList)) =:= 3 ->
-    TracerPid = spawn(fun tracer/0),
+    TracerPid = spawn_link(fun tracer/0),
     TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
     [erlang:trace_pattern(MFA, TraceSpec, [local]) || MFA <- MFAList],
     erlang:trace(PidPortSpec, true, [call, {tracer, TracerPid}]),
     receive after TimeMs -> ok end,
     erlang:trace(PidPortSpec, false, [call]),
+    erlang:trace_pattern({'_', '_', '_'}, false, [local]),
     {[], Samples} = fetch_trace(TracerPid, Progress, infinity),
     Samples.
 
@@ -107,7 +175,7 @@ replay(Map) when is_map(Map) ->
     Calls = lists:append(maps:values(Map)),
     timer:tc(lists:foreach(fun ({M,F,A}) -> erlang:apply(M,F,A) end, Calls)).
 
-export_callgrind(Data, Filename) ->
+format_callgrind(Data) ->
     % build a large iolist, write it down
     Lines = lists:map(fun ({Mod, Funs}) ->
         [io_lib:format("fl=~s\n", [Mod]), lists:map(fun ({F,A,C,Us,Calls}) ->
@@ -117,9 +185,7 @@ export_callgrind(Data, Filename) ->
                 io_lib:format("fn=~s/~b\n1 ~b ~b\n", [F,A,Us,C])
                                                     end, Funs)]
                       end, Data),
-    Binary = iolist_to_binary([<<"# callgrind format\nevents: CallTime Calls\n\n">> | Lines]),
-    file:write_file(Filename, Binary),
-    Binary.
+    iolist_to_binary([<<"# callgrind format\nevents: CallTime Calls\n\n">> | Lines]).
 
 %%%===================================================================
 %%% gen_server API
@@ -152,24 +218,27 @@ format(Options0) ->
 %%% Generic start/stop API
 %%%===================================================================
 
+-record(state, {
+    tracing = false :: boolean(),
+    tracer = undefined :: undefined | pid(),
+    call_time = undefined :: undefined | [{module(), [{{Fun :: atom(), non_neg_integer()},
+        Count :: non_neg_integer(), Time :: non_neg_integer()}]}], % {ets, [{internal_select_delete,2,1,1}, {internal_delete_all,2,3,4}]}
+    samples = undefined :: undefined | [term()],
+    traced_procs :: term()
+}).
+
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Starts call tracing profiler as a standalone server
-%%
-%% @end
-%%--------------------------------------------------------------------
+%% Starts call tracing profiler outside of supervision tree.
 -spec(start() ->
     {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
-
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts call tracing profiler as a part of supervision tree
-%%
-%% @end
-%%--------------------------------------------------------------------
 -spec(start_link() ->
     {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start_link() ->
@@ -178,13 +247,10 @@ start_link() ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Stops call tracing profiler
-%%
-%% @end
-%%--------------------------------------------------------------------
 stop()  ->
     stop(infinity).
 
--spec(stop(Timeout :: integer() | infinity) -> ok).
+-spec stop(Timeout :: integer() | infinity) -> ok.
 stop(Timeout)  ->
     gen_server:stop(?MODULE, shutdown, Timeout).
 
@@ -192,20 +258,7 @@ stop(Timeout)  ->
 %%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
-%% @end
-%%--------------------------------------------------------------------
--spec(init(Args :: term()) ->
-    {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
-    {stop, Reason :: term()} | ignore).
+-spec init(Args :: term()) -> {ok, State :: #state{}}.
 init([]) ->
     {ok, #state{}}.
 
@@ -213,9 +266,6 @@ init([]) ->
 %% @private
 %% @doc
 %% Handling call messages
-%%
-%% @end
-%%--------------------------------------------------------------------
 -spec(handle_call(Request :: term(), From :: {pid(), Tag :: term()},
     State :: #state{}) ->
     {reply, Reply :: term(), NewState :: #state{}} |
@@ -233,7 +283,7 @@ handle_call({start_trace, #{spec := PidPortSpec, sample := Sample, arity := Arit
         [_|_] ->
             % trace selected MFAs
             Arity = case Arity0 of true -> [arity]; _ -> [] end,
-            {TracerPid, _} = spawn_monitor(fun tracer/0),
+            TracerPid = spawn_link(fun tracer/0),
             TraceSpec = [{'_', [], [{message, {{cp, {caller}}}}]}],
             [erlang:trace_pattern(MFA, TraceSpec, [local]) || MFA <- Sample],
             erlang:trace(PidPortSpec, true, [call, {tracer, TracerPid}] ++ Arity),
@@ -282,34 +332,12 @@ handle_call({format, #{format := Format, sort := SortBy, progress := Progress}},
     Callers = collect_callers(Count),
     {reply, {ok, format_analysis(Data, Callers, {Progress, export}, Format, SortBy), Trace}, State};
 
+handle_call(_Request, _From, _State) ->
+    error(badarg).
 
-handle_call(Request, _From, State) ->
-    {reply, {error, {unexpected, Request}}, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_cast(Request :: term(), State :: #state{}) ->
-    {noreply, NewState :: #state{}} |
-    {noreply, NewState :: #state{}, timeout() | hibernate} |
-    {stop, Reason :: term(), NewState :: #state{}}).
 handle_cast(_Request, State) ->
-    {noreply, State}.
+    error(badarg).
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 -spec(handle_info(Info :: timeout() | term(), State :: #state{}) ->
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
@@ -318,41 +346,16 @@ handle_cast(_Request, State) ->
 handle_info({'DOWN',_MRef,process,Pid,normal}, #state{tracer = Pid, tracing = false} = State) ->
     {noreply, State#state{tracer = undefined}};
 
-handle_info(Info, State) ->
-    io:format("unexpected info: ~p~n", [Info]),
-    {noreply, State}.
+handle_info(_Info, _State) ->
+    error(badarg).
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
     State :: #state{}) -> term()).
 terminate(_Reason, #state{tracing = true, traced_procs = PidPortSpec}) ->
-    erlang:trace(PidPortSpec, false, [call]);
+    erlang:trace(PidPortSpec, false, [call]),
+    erlang:trace_pattern({'_', '_', '_'}, false, [local, call_time]);
 terminate(_Reason, _State) ->
     ok.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
--spec(code_change(OldVsn :: term() | {down, term()}, State :: #state{},
-    Extra :: term()) ->
-    {ok, NewState :: #state{}} | {error, Reason :: term()}).
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
 
 %%%===================================================================
 %%% Tracer process. Discards PIDs, either collects ETS table
@@ -360,7 +363,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%  extended tracing.
 tracer() ->
     process_flag(message_queue_data, off_heap),
-    TracerTab = ets:new(tracer, [set, private]), % table destroys itself after exiting process
+    TracerTab = ets:new(tracer, [set, private]),
     tracer_loop(TracerTab, #{}).
 
 tracer_loop(Tab, Data) ->
@@ -376,10 +379,7 @@ tracer_loop(Tab, Data) ->
             ets:delete_all_objects(Tab),
             tracer_loop(Tab, []);
         stop ->
-            ok;
-        _ ->
-            % maybe count something wrong happening?
-            tracer_loop(Tab, Data)
+            ok
     end.
 
 %%%===================================================================
@@ -545,8 +545,10 @@ report_progress(_, _, _, PrState) ->
 
 tracer_qlen(Pid) ->
     case erlang:process_info(Pid, message_queue_len) of
-        {message_queue_len, QLen} -> QLen;
-        _ -> 0
+        {message_queue_len, QLen} ->
+            QLen;
+        _ ->
+            0
     end.
 
 wait_for_data(_, Progress, PrState, QDone, QTotal, Timeout) when Timeout =< 0 ->
@@ -576,14 +578,16 @@ fetch_trace(_, _, _) ->
 % collate: Data [{Module, [Fun,Arity,Count,Sec,Usec]}] === {erl_prim_loader,[{debug,2,0,0},
 %   and -> {M,F,Arity} => {M,F,Arity,Count} === #{{ctp,trace,4} => [{erlang,trace,3,2}],
 process_callers(Data, Callers) ->
-    lists:filtermap(fun ({Mod, Funs}) ->
-        case lists:filtermap(
-            fun ({_,_,0,0}) ->
-                false;
-                ({F,Arity,C,Us}) ->
-                    {true, {F,Arity,C,Us,maps:get({Mod,F,Arity}, Callers, [])}}
-            end, Funs) of
-            [] -> false;
-            Other -> {true, {Mod, Other}}
-        end
-                    end, lists:append(Data)).
+    lists:filtermap(
+        fun ({Mod, Funs}) ->
+            case lists:filtermap(
+                fun ({_,_,0,0}) ->
+                    false;
+                    ({F,Arity,C,Us}) ->
+                        {true, {F,Arity,C,Us,maps:get({Mod,F,Arity}, Callers, [])}}
+                end, Funs) of
+                [] -> false;
+                Other -> {true, {Mod, Other}}
+            end
+        end,
+        lists:append(Data)).

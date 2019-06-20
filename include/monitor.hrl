@@ -1,7 +1,7 @@
 
 %% Job sample
 -type job_sample() :: {
-    ID :: integer(),
+    ID :: pid(),
     Cycles :: non_neg_integer()
 }.
 
@@ -22,3 +22,13 @@
     jobs :: [job_sample()]
 }).
 
+-type monitor_sample() :: #monitor_sample{}.
+
+% monitoring event bus
+-define(SYSTEM_EVENT, ep_system_event).
+
+% job event bus
+-define(JOB_EVENT, ep_job_event).
+
+% history server pg2 group
+-define(HISTORY_PROCESS_GROUP, erlperf_history).
