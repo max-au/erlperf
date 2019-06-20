@@ -25,7 +25,6 @@
 
 %% Test cases
 -export([
-    basic/0, basic/1,
     console/0, console/1,
     errors/1,
     manual_start/0, manual_start/1
@@ -35,11 +34,7 @@ suite() ->
     [{timetrap, {seconds, 10}}].
 
 init_per_suite(Config) ->
-    Filename = filename:join(?config(priv_dir, Config), "file_log.txt"),
-    ok = application:set_env(erlperf, ep_file_log, Filename),
-    ok = application:start(erlperf),
-    application:unset_env(erlperf, ep_file_log),
-    test_helpers:ensure_started(erlperf, [{log_file, Filename} | Config]).
+    test_helpers:ensure_started(erlperf, Config).
 
 end_per_suite(Config) ->
     test_helpers:ensure_stopped(Config).
@@ -53,21 +48,11 @@ end_per_testcase(_TestCase, Config) ->
     Config.
 
 groups() ->
-    [{all, [parallel], [basic, console, errors, manual_start]}].
+    [{all, [parallel], [console, errors, manual_start]}].
 
 %% cannot run basic & manual_start in parallel, due to specific "init" for basic.
 all() ->
     [{group, all}].
-
-basic() ->
-    [{doc, "Tests file logging"}].
-
-basic(Config) ->
-    erlperf:run({timer, sleep, [1]}),
-    % read the file
-    Filename = ?config(log_file, Config),
-    {ok, Logs} = file:read_file(Filename),
-    ?assert(byte_size(Logs) > 10).
 
 console() ->
     [{doc, "Tests console logging"}].

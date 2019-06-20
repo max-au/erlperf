@@ -13,6 +13,7 @@
 
 -export([
     start_link/0,
+    start_link/2,
     init/1
 ]).
 
@@ -27,6 +28,21 @@ start_link() ->
         _ ->
             supervisor:start_link({local, ?SERVER}, ?MODULE, [])
     end.
+
+start_link(Sup, Log) ->
+    supervisor:start_link({local, Sup}, ?MODULE, Log).
+
+init(Log) when Log =:= ep_file_log; Log =:= ep_cluster_monitor ->
+    SupFlags = #{
+        strategy => simple_one_for_one,
+        intensity => 5,
+        period => 60},
+    ChildSpecs = [
+        #{id => Log,
+            start => {Log, start_link, []},
+            modules => [Log]}
+    ],
+    {ok, {SupFlags, ChildSpecs}};
 
 init([]) ->
     SupFlags = #{strategy => rest_for_one,
@@ -44,11 +60,6 @@ init([]) ->
             start => {ep_history, start_link, []},
             modules => [ep_history]},
 
-        %% file log, if asked for
-        #{id => ep_file_log,
-            start => {ep_file_log, start_link, []},
-            modules => [ep_file_log]},
-
         %% pg2 logger
         #{id => ep_monitor_proxy,
             start => {ep_monitor_proxy, start_link, []},
@@ -63,6 +74,19 @@ init([]) ->
         %   fire events, depends on system_event to be alive
         #{id => ep_monitor,
             start => {ep_monitor, start_link, []},
-            modules => [ep_monitor]}
+            modules => [ep_monitor]},
+
+        % file/console node-only monitor
+        #{id => ep_file_log_sup,
+            start => {?MODULE, start_link, [ep_file_log_sup, ep_file_log]},
+            type => supervisor,
+            modules => [?MODULE]},
+
+        % cluster-wide monitoring
+        #{id => ep_cluster_monitor_sup,
+            start => {?MODULE, start_link, [ep_cluster_monitor_sup, ep_cluster_monitor]},
+            type => supervisor,
+            modules => [?MODULE]}
+
         ],
     {ok, {SupFlags, ChildSpecs}}.

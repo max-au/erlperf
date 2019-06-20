@@ -13,7 +13,7 @@
 -export([
     start/1,
     stop/1,
-    start_link/0
+    start_link/1
 ]).
 
 %% gen_server callbacks
@@ -30,15 +30,10 @@
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
--spec(start_link() ->
+-spec(start_link(Filename :: string() | file:io_device()) ->
     {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-start_link() ->
-    case application:get_env(?MODULE) of
-        undefined ->
-            ignore;
-        {ok, Filename} ->
-            gen_server:start_link({local, ?MODULE}, ?MODULE, [Filename], [])
-    end.
+start_link(Filename) ->
+    gen_server:start_link(?MODULE, [Filename], []).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -46,7 +41,7 @@ start_link() ->
 %% Server is started outside of supervision tree.
 -spec start(Target :: file:filename() | file:io_device()) -> {ok, Pid :: pid()} | {error, Reason :: term()}.
 start(Filename) ->
-    gen_server:start(?MODULE, [Filename], []).
+    supervisor:start_child(ep_file_log_sup, [Filename]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -54,7 +49,7 @@ start(Filename) ->
 %%  of supervision tree, server will restart.
 -spec stop(pid()) -> ok.
 stop(Pid) ->
-    gen_server:stop(Pid).
+    supervisor:terminate_child(ep_file_log_sup, Pid).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -99,12 +94,12 @@ handle_info(#monitor_sample{jobs = Jobs} = Sample, #state{log_file = File} = Sta
     {JobIds, Ts} = lists:unzip(Jobs),
     State1 = maybe_write_header(JobIds, State),
     % actual line
-    {{Y, M, D}, {H, Min, Sec}} = calendar:gregorian_seconds_to_datetime(Sample#monitor_sample.time div 1000),
+    TimeFormat = calendar:system_time_to_rfc3339(Sample#monitor_sample.time div 1000),
     Formatted = iolist_to_binary(io_lib:format(State1#state.format, [
-        Y, M, D, H, Min, Sec,
-        Sample#monitor_sample.sched_util * 100,
-        Sample#monitor_sample.dcpu * 100,
-        Sample#monitor_sample.dio * 100,
+        TimeFormat,
+        Sample#monitor_sample.sched_util,
+        Sample#monitor_sample.dcpu,
+        Sample#monitor_sample.dio,
         Sample#monitor_sample.processes,
         Sample#monitor_sample.ports,
         Sample#monitor_sample.ets,
@@ -132,9 +127,9 @@ maybe_write_header(_, State) ->
 
 write_header(#state{log_file = File, jobs = Jobs} = State) ->
     JobCount = length(Jobs),
-    Format = "~4.4.0w-~2.2.0w-~2.2.0wT~2.2.0w:~2.2.0w:~2.2.0w ~6.2f ~6.2f ~6.2f ~8b ~8b ~7b ~9s ~9s ~9s ~9s" ++
-        lists:flatten(lists:duplicate(JobCount, "~8s")) ++ "~n",
+    Format = "~s ~6.2f ~6.2f ~6.2f ~8b ~8b ~7b ~9s ~9s ~9s ~9s" ++
+        lists:flatten(lists:duplicate(JobCount, "~11s")) ++ "~n",
     JobIds = list_to_binary(lists:flatten([io_lib:format("  ~6p", [J]) || J <- Jobs])),
-    Header =  <<"\nYYYY-MM-DDTHH:MM:SS  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS", JobIds/binary, "\n">>,
+    Header =  <<"\nYYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS", JobIds/binary, "\n">>,
     ok = file:write(File, Header),
     State#state{format = Format, log_counter = 0}.

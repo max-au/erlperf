@@ -4,7 +4,7 @@
 %%% @doc
 %%%   Call time profiler, and a series of helper functions.
 %%% @end
--module(ctp).
+-module(ep_prof).
 -author("maximfca@gmail.com").
 
 -behaviour(gen_server).
@@ -17,11 +17,10 @@
     trace/4,
     record/2,
     sample/4,
-    replay/1,
     format_callgrind/1
 ]).
 
-%% gen_server API
+%% Continuous profiling API
 -export([
     start_trace/0,
     start_trace/1,
@@ -32,16 +31,13 @@
     format/1
 ]).
 
-%% Generic start/stop API
+%% Generic start/stop API, gen_server callbacks
 -export([
     start/0,
     start_link/0,
     stop/0,
-    stop/1
-]).
+    stop/1,
 
-%% gen_server callbacks
--export([
     init/1,
     handle_call/3,
     handle_cast/2,
@@ -165,15 +161,6 @@ sample(PidPortSpec, TimeMs, MFAList, Progress) when is_list(MFAList), tuple_size
     erlang:trace_pattern({'_', '_', '_'}, false, [local]),
     {[], Samples} = fetch_trace(TracerPid, Progress, infinity),
     Samples.
-
-replay(Filename) when is_list(Filename) ->
-    {ok, Bin} = file:read_file(Filename),
-    Map = binary_to_term(Bin),
-    true = is_map(Map),
-    replay(Map);
-replay(Map) when is_map(Map) ->
-    Calls = lists:append(maps:values(Map)),
-    timer:tc(lists:foreach(fun ({M,F,A}) -> erlang:apply(M,F,A) end, Calls)).
 
 format_callgrind(Data) ->
     % build a large iolist, write it down
@@ -335,7 +322,7 @@ handle_call({format, #{format := Format, sort := SortBy, progress := Progress}},
 handle_call(_Request, _From, _State) ->
     error(badarg).
 
-handle_cast(_Request, State) ->
+handle_cast(_Request, _State) ->
     error(badarg).
 
 -spec(handle_info(Info :: timeout() | term(), State :: #state{}) ->

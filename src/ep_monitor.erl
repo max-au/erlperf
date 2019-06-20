@@ -133,9 +133,9 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
         memory_processes = erlang:memory(processes),
         memory_binary = erlang:memory(binary),
         memory_ets = erlang:memory(ets),
-        sched_util = NU,
-        dcpu = DU,
-        dio = DioU,
+        sched_util = NU * 100,
+        dcpu = DU * 100,
+        dio = DioU * 100,
         processes = erlang:system_info(process_count),
         ports = erlang:system_info(port_count),
         ets = erlang:system_info(ets_count),
@@ -144,7 +144,7 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
     gen_event:notify(?SYSTEM_EVENT, Sample),
     NextTick = State#state.next_tick + State#state.tick,
     erlang:start_timer(NextTick, self(), tick, [{abs, true}]),
-    State#state{sched_data = NewSched, next_tick = NextTick, jobs = UpdatedJobs}.
+    State#state{sched_data = NewSched, next_tick = NextTick, jobs = lists:reverse(UpdatedJobs)}.
 
 %% Iterates over normal scheduler
 fold_normal(Old, New, 0, Dcpu, AccActive, AccTotal) ->

@@ -17,7 +17,10 @@
     run/1,
     run/2,
     run/3,
-    compare/2
+    compare/2,
+    record/4,
+    start/2,
+    load/1
 ]).
 
 %% Public API: escript
@@ -28,7 +31,6 @@
 
 %% Formatters & convenience functions.
 -export([
-    start/0,
     format_number/1,
     format_size/1
 ]).
@@ -90,6 +92,9 @@
 
 -export_type([isolation/0, run_options/0, concurrency_test/0]).
 
+%% Milliseconds, timeout for any remote node operation
+-define(REMOTE_NODE_TIMEOUT, 10000).
+
 %% @doc Simple case.
 %%  Runs a single benchmark, and returns a steady QPS number.
 %%  Job specification may include suite & worker init parts, suite cleanup,
@@ -116,6 +121,38 @@ run(Code, RunOptions, ConTestOpts) ->
     Series.
 
 %% @doc
+%% Records call trace, so it could be used to benchmark later.
+record(Module, Function, Arity, TimeMs) ->
+    TracerPid = spawn_link(fun tracer/0),
+    TraceSpec = [{'_', [], []}],
+    MFA = {Module, Function, Arity},
+    erlang:trace_pattern(MFA, TraceSpec, [global]),
+    erlang:trace(all, true, [call, {tracer, TracerPid}]),
+    receive after TimeMs -> ok end,
+    erlang:trace(all, false, [call]),
+    erlang:trace_pattern(MFA, false, [global]),
+    TracerPid ! {stop, self()},
+    receive
+        {data, Samples} ->
+            Samples
+    end.
+
+%% @doc
+%% Starts a continuously running job in a new BEAM instance.
+-spec start(ep_job:code(), isolation()) -> {ok, node(), pid()}.
+start(Code, _Isolation) ->
+    [Node] = prepare_nodes(1),
+    {ok, Pid} = rpc:call(Node, ep_job, start, [Code], ?REMOTE_NODE_TIMEOUT),
+    {ok, Node, Pid}.
+
+%% @doc
+%% Loads previously saved job (from file in the priv_dir)
+-spec load(file:filename()) -> ep_job:code().
+load(Filename) ->
+    {ok, Bin} = file:read_file(filename:join(code:priv_dir(erlperf), Filename)),
+    binary_to_term(Bin).
+
+%% @doc
 %% Comparison run: starts several jobs and measures throughput for
 %%  all of them at the same time.
 %% All job options are honoured, and if there is isolation applied,
@@ -130,11 +167,6 @@ compare(Codes, RunOptions) ->
 main(Args) ->
     {RunOpts, ConcurrencyOpts, Code} =  parse_cmd_line(Args, {#{}, #{}, []}),
     main_impl(RunOpts, ConcurrencyOpts, Code).
-
-%% @doc
-%% Starts erlperf as an Erlang/OTP application.
-start() ->
-    application:start(erlperf).
 
 %% @doc Formats number rounded to 3 digits.
 %%  Example: 88 -> 88, 880000 -> 880 Ki, 100501 -> 101 Ki
@@ -269,9 +301,6 @@ run_main(RunOpts, _, Codes) ->
 %%%===================================================================
 %%% Benchmarking itself
 
-%% Milliseconds, timeout for any remote node operation
--define(REMOTE_NODE_TIMEOUT, 10000).
-
 start_nodes([], Nodes) ->
     Nodes;
 start_nodes([Host | Tail], Nodes) ->
@@ -285,23 +314,25 @@ start_nodes([Host | Tail], Nodes) ->
             start_nodes([Host | Tail], Nodes)
     end.
 
-%% isolation requested: need to rely on cluster_monitor and other distributed things.
-run_impl(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
+prepare_nodes(HowMany) ->
     not erlang:is_alive() andalso error(not_alive),
     % start multiple nodes, ensure cluster_monitor is here (start supervisor if needs to)
     [_, HostString] = string:split(atom_to_list(node()), "@"),
     Host = list_to_atom(HostString),
-    Nodes = start_nodes(lists:duplicate(length(Codes), Host), []),
+    Nodes = start_nodes(lists:duplicate(HowMany, Host), []),
     % start 'erlperf' app on all slaves
-    Expected = lists:duplicate(length(Codes), {ok, [erlperf]}),
+    Expected = lists:duplicate(HowMany, {ok, [erlperf]}),
     %
     case rpc:multicall(Nodes, application, ensure_all_started, [erlperf], ?REMOTE_NODE_TIMEOUT) of
         {Expected, []} ->
-            ok;
+            Nodes;
         Other ->
             error({start_failed, Other, Expected, Nodes})
-    end,
-    % start jobs on these nodes, this isn't a multi-call though, but a pmap.
+    end.
+
+%% isolation requested: need to rely on cluster_monitor and other distributed things.
+run_impl(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
+    Nodes = prepare_nodes(length(Codes)),
     Opts = maps:remove(isolation, Options),
     try
         % no timeout here (except that rpc itself could time out)
@@ -407,7 +438,7 @@ report_benchmark(SamplesList, _) ->
 %% Test considered complete when either:
 %%  * maximum number of workers reached
 %%  * last 'threshold' added workers did not increase throughput
-perform_squeeze(_Pid, _CRef, Current, History, QMax, Options, #{max := Current}) ->
+perform_squeeze(_Pid, _CRef, Current, History, QMax, Options, #{max := Max}) when Current > Max ->
     % reached max allowed schedulers, exiting
     report_squeeze(QMax, History, Options);
 
@@ -438,3 +469,17 @@ maxed(_, Current, {_, W}, Count) when Current - W > Count ->
     true;
 maxed(_, _, QMax, _) ->
     QMax.
+
+%%%===================================================================
+%%% Tracer process, uses heap to store tracing information.
+tracer() ->
+    process_flag(message_queue_data, off_heap),
+    tracer_loop([]).
+
+tracer_loop(Trace) ->
+    receive
+        {trace, _Pid, call, MFA} ->
+            tracer_loop([MFA | Trace]);
+        {stop, Control} ->
+            Control ! {data, Trace}
+    end.

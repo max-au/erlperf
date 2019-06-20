@@ -46,7 +46,10 @@
     runner := callable(),
     init => callable(),
     init_runner => callable(),
-    done  => callable()
+    done  => callable(),
+    %
+    initial_concurrency => non_neg_integer(),
+    name => string()
 }.
 
 %% Code: callable, callable with hooks
@@ -86,6 +89,8 @@ set_concurrency(JobId, Concurrency) ->
 info(JobId) ->
     gen_server:call(JobId, info).
 
+%% @doc
+%% Internally used by the monitoring process to access job atomic counter.
 -spec get_counters(pid()) -> reference().
 get_counters(JobId) ->
     gen_server:call(JobId, get_counters).
@@ -126,7 +131,12 @@ init(Code) ->
     IR = call(State0#state.init, undefined),
     erlang:process_flag(trap_exit, true),
     gen_event:notify(?JOB_EVENT, {started, self(), Code, CRef}),
-    {ok, State0#state{code = Code, cref = CRef, init_result = IR}}.
+    State1 = State0#state{code = Code, cref = CRef, init_result = IR},
+    maybe_save(Code),
+    Concurrency = if is_map(Code) -> maps:get(initial_concurrency, Code, 0); true -> 0 end,
+    {ok, State1#state{
+        workers = set_concurrency_impl(Concurrency, State1)
+    }}.
 
 handle_call(info, _From, #state{code = Code} = State) ->
     {reply, {ok, Code, length(State#state.workers)}, State};
@@ -168,6 +178,13 @@ terminate(_Reason, #state{done = Done, init_result = IR, module = Mod} = State) 
 %%%===================================================================
 %%% Internal: callable & runner implementation
 %%%===================================================================
+
+maybe_save(#{name := Name} = Code) ->
+    Filename = filename:join(code:priv_dir(erlperf), Name),
+    filelib:ensure_dir(Filename),
+    file:write_file(Filename, term_to_binary(Code));
+maybe_save(_) ->
+    ok.
 
 %% undefined: return undefined
 call(undefined, _) ->

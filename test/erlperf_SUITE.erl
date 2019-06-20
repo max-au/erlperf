@@ -37,6 +37,8 @@ init_per_group(cmdline, Config) ->
 init_per_group(_, Config) ->
     test_helpers:ensure_started(erlperf, Config).
 
+end_per_group(cmdline, Config) ->
+    Config;
 end_per_group(_, Config) ->
     test_helpers:ensure_stopped(Config).
 
@@ -67,11 +69,11 @@ groups() ->
             mfa_no_concurrency,
             code_extra_node,
             crasher, undefer,
-            errors,
             compare,
+            errors,
             formatters
         ]},
-        {cmdline, [parallel], [
+        {cmdline, [sequential], [
             cmd_line_simple,
             cmd_line_compare,
             cmd_line_squeeze,
@@ -79,11 +81,14 @@ groups() ->
         ]},
         {squeeze, [], [
             mfa_squeeze
+        ]},
+        {replay, [sequential], [
+            replay
         ]}
     ].
 
 all() ->
-    [{group, benchmark}, {group, cmdline}, {group, squeeze}].
+    [{group, benchmark}, {group, cmdline}, {group, squeeze}, {group, replay}].
 
 %%--------------------------------------------------------------------
 %% Helpers: gen_server implementation
@@ -217,6 +222,10 @@ undefer(_Config) ->
     ?assertException(error, {badmatch, {error, {{module_not_found, '$cannot_be_this'}, _}}},
         erlperf:run({'$cannot_be_this', throw, []}, #{concurrency => 2})).
 
+compare(_Config) ->
+    [C1, C2] = erlperf:compare(["timer:sleep(1).", "timer:sleep(2)."], #{sample_duration => 100}),
+    ?assert(C1 > C2).
+
 errors() ->
     [{doc, "Tests various error conditions"}].
 
@@ -235,7 +244,7 @@ mfa_squeeze() ->
 
 mfa_squeeze(_Config) ->
     ?assert(erlang:system_info(schedulers_online) > 1), % makes no sense to run with 1 scheduler
-    {QPS, CPU} = erlperf:run({rand, uniform, [1]}, #{sample_duration => 100, warmup => 1}, #{}),
+    {QPS, CPU} = erlperf:run({rand, uniform, [1]}, #{sample_duration => 50, warmup => 1}, #{}),
     HaveCPU = erlang:system_info(schedulers_online),
     ct:pal("Schedulers: ~b, detected: ~p, QPS: ~p", [HaveCPU, CPU, QPS]),
     ?assert(QPS > 0),
@@ -268,7 +277,7 @@ cmd_line_squeeze() ->
 
 cmd_line_squeeze(_Config) ->
     Out = test_helpers:capture_io(
-        fun () -> erlperf:main(["timer:sleep(1).", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
+        fun () -> erlperf:main(["timer:sleep(1).", "--sample_duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
     ?assertNotEqual([], Out),
     ok.
 
@@ -276,10 +285,6 @@ cmd_line_usage(_Config) ->
     Out = test_helpers:capture_io(fun () -> erlperf:main(["-q"]) end),
     ?assertEqual("Usage", lists:sublist(hd(Out), 5)),
     ok.
-
-compare(_Config) ->
-    [C1, C2] = erlperf:compare(["timer:sleep(1).", "timer:sleep(2)."], #{}),
-    ?assert(C1 > C2).
 
 formatters(_Config) ->
     ?assertEqual("88", erlperf:format_size(88)),
@@ -292,3 +297,17 @@ formatters(_Config) ->
     ?assertEqual("432 Ki", erlperf:format_number(431992)),
     ?assertEqual("333 Mi", erlperf:format_number(333000000)),
     ?assertEqual("999 Gi", erlperf:format_number(998500431992)).
+
+%%--------------------------------------------------------------------
+%% record-replay
+
+replay(Config) when is_list(Config) ->
+    spawn(fun () -> timer:sleep(10), do_anything(10) end),
+    Trace = erlperf:record(?MODULE, '_', '_', 100),
+    QPS = erlperf:run(Trace),
+    ?assert(QPS > 10).
+
+do_anything(0) ->
+    timer:sleep(1);
+do_anything(N) ->
+    ?MODULE:do_anything(N - 1).

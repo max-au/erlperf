@@ -56,7 +56,6 @@ subscribe() ->
 subscribe(_Config) ->
     % start a benchmark and see it running on 1 scheduler
     {ok, Job} = ep_job:start({timer, sleep, [10]}),
-    [{_, Job, _, _}] = supervisor:which_children(ep_job_sup),
     ok = ep_job:set_concurrency(Job, 4),
     % wait for 3 seconds, receive updates
     First = receive_updates(Job, 0, 2),

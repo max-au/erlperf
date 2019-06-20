@@ -3,24 +3,29 @@ erlperf
 
 Simple way to say "this code is faster than that one".
 
+Build:
+
+    $ rebar3 escriptize
+    $ cp _build/default/bin/erlperf ./
+
 # TL; DR
 
 Find out how many times per second a function can be run  (beware of shell escaping your code!):
 
-    $ erlperf 'timer:sleep(1).'
+    $ ./erlperf 'timer:sleep(1).'
     Code               Concurrency   Throughput
     timer:sleep(1).              1          498
 
 Run erlperf with two concurrently running samples of code
 
-    $ erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1
+    $ ./erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1
     Code                         Concurrency   Throughput   Relative
     rand:uniform().                        1      4303 Ki       100%
     crypto:strong_rand_bytes(2).           1      1485 Ki        35%
 
 Or just measure how concurrent your code is:
 
-    $ erlperf 'pg2:create(foo).' --squeeze
+    $ ./erlperf 'pg2:create(foo).' --squeeze
     Code                         Concurrency   Throughput
     pg2:create(foo).                      14      9540 Ki
 
@@ -33,28 +38,39 @@ development and testing stages, allowing to quickly notice performance regressio
  
 Usage example (assuming you're running an OTP release, or rebar3 shell for you application):
 
-    $ rebar3 shell
+    $ rebar3 shell --sname mynode
     > application:start(erlperf).
     ok.
     
-    > file_log:start().
+    > {ok, Logger} = ep_file_log:start(group_leader()).
     {ok,<0.235.0>}
     
-    > {ok, JobPid} = job:start(#{name => myname, init_runner => "myapp:generate_seed().", 
-      runner => "runner(Arg) -> Var = mymodule:call(Arg), mymodule:done(Var)."}).
+    > {ok, JobPid} = ep_job:start(#{name => myname, 
+        init_runner => "myapp:generate_seed().", 
+        runner => "runner(Arg) -> Var = mymodule:call(Arg), mymodule:done(Var).",
+        initial_concurrency => 1}).
     {ok,<0.291.0>}
     
-    % watch your job performance
+    > ep_job:set_concurrency(JobPid, 2).
+    ok.
+    
+    % watch your job performance (local node)
+
     % modify your application code, do hot code reload
     > c:l(mymodule).
     {module, mymodule}.
     
+    % stop logging for local node
+    > ep_file_log:stop(Logger).
+    ok
+    
     % stop the job
-    > job:stop(JobPid).
+    > ep_job:stop(JobPid).
+    ok.
     
     % restart the job (code is saved for your convenience, and can be accessed by name)
     % makes it easy to restart the job if it crashed due to bad code loaded
-    > job:start(job:load(myname)).
+    > ep_job:start(ep_job:load(myname)).
     {ok,<0.1121.0>}
     
     % when finished, just shut everything down with one liner:
@@ -169,13 +185,58 @@ in the future.
 Not yet measured. There may be a better way (using call time tracing instead of 
 counter injections), to be determined later.
 
-## Recording call chain
-Call Time Profiler (ctp) should be used to record a call chain. Example:
+## Experimental: recording call chain
+Benchmarking can only work with exported functions (unlike ep_prof module,
+that is also able to record arguments of local function calls).
+
 ```
-    > Trace = ctp:record({ets, lookup, '_'}).
+    > f(Trace), Trace = erlperf:record(pg2, '_', '_', 1000).
     ...
-    > erlperf:benchmark(Trace).
+    
+    % for things working with ETS, isolation is recommended
+    > erlperf:run(Trace, #{isolation => #{}}).
     ...
+    
+    % Trace can be saved to file before executing:
+    > erlperf:run(#{runner => Trace, name => "pg2"}).
+    
+    % run the trace with
+    > erlperf:run(erlperf:load("pg2")).
 ```
 
+It's possible to create a Common Test testcase using recorded samples.
+Just put the recorded file into xxx_SUITE_data:
+```
+    QPS = erlperf:run(erlperf:load(?config(data_dir, "pg2"))),
+    ?assert(QPS > 500). % catches regression for QPS falling below 500
+```
 
+## Experimental: starting jobs in a cluster
+
+It's possible to run a job on a separate node in the cluster.
+
+```
+    % watch the entire cluster (printed to console)
+    > {ok, ClusterLogger} = ep_cluster_monitor:start().
+    {ok, <0.211.0>}
+    
+    % also log cluster-wide reports (jobs & sched_util)
+    > {ok, ClusterLogger} = ep_cluster_monitor:start("/tmp/cluster", [time, sched_util, jobs]).
+    {ok, <0.223.0>}
+
+    % start the benchmarking process in a separate beam
+    > {ok, Node, Job} = erlperf:start(#{
+        runner => {timer, sleep, [2]}, initial_concurrency => 4}, 
+        #{}).
+    {ok,job_53480@centos,<16735.104.0>}
+
+    % tail the file with "tail -f /tmp/cluster"
+
+    % change concurrency:
+    > rpc:call(Node, ep_job, set_concurrency, [Job, 8]).
+    ok
+    
+    % watch the log file tail
+```
+
+Cluster-wide monitoring will reflect changes accordingly.
