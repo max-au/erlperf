@@ -75,9 +75,12 @@ groups() ->
         ]},
         {cmdline, [sequential], [
             cmd_line_simple,
+            cmd_line_verbose,
             cmd_line_compare,
             cmd_line_squeeze,
-            cmd_line_usage
+            cmd_line_usage,
+            cmd_line_init,
+            cmd_line_pg2
         ]},
         {squeeze, [], [
             mfa_squeeze
@@ -161,6 +164,7 @@ code_fun1(_Config) ->
 mfa_init(_Config) ->
     C = erlperf:run(#{
         runner => fun (1) -> timer:sleep(1) end,
+        init => [{rand, seed, [exrop]}, {rand, uniform, [100]}],
         init_runner => {erlang, abs, [-1]}
     }),
     ?assert(C > 250 andalso C < 1101).
@@ -253,37 +257,74 @@ mfa_squeeze(_Config) ->
 %%--------------------------------------------------------------------
 %% command-line testing
 
-% erlperf 'timer:sleep(1).'
-% Code               Concurrency   Throughput
-% timer:sleep(1).              1          498
+% erlperf 'timer:sleep(1). -d 100'
 cmd_line_simple(_Config) ->
-    Out = test_helpers:capture_io(fun () -> erlperf:main(["timer:sleep(1)."]) end),
-    ?assertNotEqual([], Out),
+    Code = "timer:sleep(1).",
+    Out = test_helpers:capture_io(fun () -> erlperf:main([Code, "-d", "100"]) end),
+    [LN1, LN2] = string:split(Out, "\n"),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
     ok.
 
-% erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' -samples 10 -warmup 1
+% erlperf 'timer:sleep(1). -v'
+cmd_line_verbose(_Config) ->
+    Code = "timer:sleep(1).",
+    Out = test_helpers:capture_io(fun () -> erlperf:main([Code, "-v"]) end),
+    Lines = string:lexemes(Out, "\n"),
+    ?assert(length(Lines) > 3),
+    ok.
+
+% erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' -d 100 -s 5 -w 1 -c 2
 cmd_line_compare(_Config) ->
     Out = test_helpers:capture_io(
-        fun () -> erlperf:main(["timer:sleep(1).", "timer:sleep(2).", "-s", "5", "-d", "100", "-w", "1"]) end),
+        fun () -> erlperf:main(["timer:sleep(1).", "timer:sleep(2).", "-s", "5", "-d", "100", "-w", "1", "-c", "2"]) end),
     ?assertNotEqual([], Out),
     % Code            Concurrency   Throughput   Relative
     % timer:sleep().            2          950       100%
     % timer:sleep(2).           2          475        50%
     ok.
 
-
 cmd_line_squeeze() ->
     [{doc, "Tests concurrency test via command line"}, {timetrap, {seconds, 30}}].
 
+% erlperf 'timer:sleep(1).' --sample_duration 50 --squeeze --min 2 --max 4 --threshold 2
 cmd_line_squeeze(_Config) ->
     Out = test_helpers:capture_io(
         fun () -> erlperf:main(["timer:sleep(1).", "--sample_duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
     ?assertNotEqual([], Out),
     ok.
 
+% erlperf -q
 cmd_line_usage(_Config) ->
     Out = test_helpers:capture_io(fun () -> erlperf:main(["-q"]) end),
-    ?assertEqual("Usage", lists:sublist(hd(Out), 5)),
+    ?assertEqual("Usage", lists:sublist(Out, 5)),
+    Out2 = test_helpers:capture_io(fun () -> erlperf:main(["--un code"]) end),
+    ?assertEqual("Unrecognised", lists:sublist(Out2, 12)),
+    ok.
+
+% erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'
+cmd_line_init(_Config) ->
+    Code = "pg2:join(foo,self()),pg2:leave(foo,self()).",
+    Out = test_helpers:capture_io(fun () -> erlperf:main(
+        [Code, "--init", "1", "pg2:create(foo).", "--done", "1", "pg2:delete(foo)."])
+                                  end),
+    % verify 'done' was done
+    ?assertEqual({error,{no_such_group,foo}}, pg2:get_members(foo)),
+    % verify output
+    [LN1, LN2] = string:split(Out, "\n"),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
+    ok.
+
+% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 1 'pg2:create(self()), self().'
+cmd_line_pg2(_Config) ->
+    Code = "runner(Arg)->ok=pg2:join(Arg,self()),ok=pg2:leave(Arg,self()).",
+    Out = test_helpers:capture_io(fun () -> erlperf:main(
+        [Code, "--init_runner", "1", "pg2:create(self()), self()."])
+                                  end),
+    [LN1, LN2] = string:split(Out, "\n"),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
     ok.
 
 formatters(_Config) ->

@@ -200,6 +200,8 @@ call({M, F, A}, Arg) when is_atom(M), is_atom(F), is_list(A) ->
     end;
 
 %% MFA List (+1 argument always ignored)
+call([{M, F, A}], _) when is_atom(M), is_atom(F), is_list(A) ->
+    erlang:apply(M, F, A);
 call([{M, F, A} | Tail], _) when is_atom(M), is_atom(F), is_list(A) ->
     erlang:apply(M, F, A),
     call(Tail, undefined);
@@ -231,6 +233,24 @@ runner_fun_1(Fun, IWR, CRef) ->
     atomics:add(CRef, 1, 1),
     runner_fun_1(Fun, IWR, CRef).
 
+%% necessary optimisation: remove as much as possible from the actual loop
+runner_impl({M, F, A}, IWR, CRef) ->
+    case erlang:function_exported(M, F, length(A)) of
+        true ->
+            runner(M, F, A, CRef);
+        false ->
+            runner(M, F, A ++ [IWR], CRef)
+    end;
+% for [MFA], init/init_runner are not applicable
+runner_impl([{_, _, _} | _] = List, _IWR, CRef) ->
+    runner_list(List, CRef);
+% for fun() with 0 args, init/init_runner are not applicable
+runner_impl(Fun, _IWR, CRef) when is_function(Fun, 0) ->
+    runner_fun_0(Fun, CRef);
+% clause for fun(Arg).
+runner_impl(Fun, IWR, CRef) when is_function(Fun, 1) ->
+    runner_fun_1(Fun, IWR, CRef).
+
 set_concurrency_impl(Concurrency, #state{workers = Workers}) when length(Workers) =:= Concurrency ->
     Workers;
 
@@ -238,25 +258,8 @@ set_concurrency_impl(Concurrency, #state{workers = Workers, init_runner = InitRu
     runner = Runner, cref = CRef})
     when length(Workers) < Concurrency ->
     Hired = [spawn_link(
-        fun () ->
-            IWR = call(InitRunner, IR),
-            %% necessary optimisation: this is a very tight loop
-            case Runner of
-                {M, F, A} ->
-                    case erlang:function_exported(M, F, length(A)) of
-                        true ->
-                            runner(M, F, A, CRef);
-                        false ->
-                            runner(M, F, A ++ [IWR], CRef)
-                    end;
-                [{_, _, _} | _] = List ->
-                    runner_list(List, CRef);
-                Fun when is_function(Fun, 0) ->
-                    runner_fun_0(Fun, CRef);
-                Fun when is_function(Fun, 1) ->
-                    runner_fun_1(Fun, IWR, CRef)
-            end
-        end) || _ <- lists:seq(length(Workers) + 1, Concurrency)],
+        fun () -> runner_impl(Runner, call(InitRunner, IR), CRef) end)
+        || _ <- lists:seq(length(Workers) + 1, Concurrency)],
     Workers ++ Hired;
 
 set_concurrency_impl(Concurrency, #state{workers = Workers}) ->

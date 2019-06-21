@@ -25,8 +25,7 @@
 
 %% Public API: escript
 -export([
-    main/1,
-    run_impl/3
+    main/1
 ]).
 
 %% Formatters & convenience functions.
@@ -198,7 +197,7 @@ format_size(Num) ->
 %%% ArgParse library is not ready yet, so do home-made parsing
 
 parse_cmd_line([], {RunOpt, COpt, Codes}) ->
-    {RunOpt, COpt, lists:reverse(Codes)};
+    {RunOpt, COpt, Codes};
 % run options
 parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--concurrency"; Opt =:= "-c" ->
     parse_cmd_line(Tail, {RunOpt#{concurrency => list_to_integer(Number)}, COpt, Codes});
@@ -220,16 +219,29 @@ parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--max"
 parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--threshold"; Opt =:= "-t" ->
     parse_cmd_line(Tail, {RunOpt, COpt#{threshold => list_to_integer(Number)}, Codes});
 parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--squeeze"; Opt =:= "-q"  ->
-    parse_cmd_line(Tail, {RunOpt, COpt#{run => true}, Codes}); % this adds a key to map, making it non-empty
+    parse_cmd_line(Tail, {RunOpt, COpt#{min => maps:get(min, COpt, 1)}, Codes});
 parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--verbose"; Opt =:= "-v"  ->
     parse_cmd_line(Tail, {RunOpt#{verbose => true}, COpt, Codes});
+% init/done/init_runner
+parse_cmd_line(["--init", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
+    parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, init, Index0, Codes)});
+parse_cmd_line(["--done", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
+    parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, done, Index0, Codes)});
+parse_cmd_line(["--init_runner", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
+    parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, init_runner, Index0, Codes)});
 % invalid options
 parse_cmd_line([[$- | Opt] | _Tail], _) ->
     io:format("Unrecognised option: ~s~n", [Opt]),
     {#{}, #{}, []};
-% must be code
+% Code
 parse_cmd_line([Code | Tail], {RunOpt, COpt, Codes}) ->
-    parse_cmd_line(Tail, {RunOpt, COpt, [Code | Codes]}).
+    parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => Code}]}).
+
+replace_code(Code, Type, IndexString, Codes) ->
+    Index = list_to_integer(IndexString),
+    {L, R} = lists:split(Index, Codes),
+    OldRunner = lists:last(L),
+    lists:droplast(L) ++ [OldRunner#{Type => Code}] ++ R.
 
 main_impl(_, _, []) ->
     io:format("Usage: erlperf [OPTIONS] CODE1 [CODE2]~n"),
@@ -246,17 +258,28 @@ main_impl(_, _, []) ->
     io:format("    --min              PROCS    - start with this amount of processes (default 1)~n"),
     io:format("    --max              PROCS    - stop squueze test after reaching this value~n"),
     io:format("    -t, --threshold    SAMPLES  - collect more samples for squeeze test (default 3)~n"),
+    io:format("Runner hooks: ~n"),
+    io:format("    --init       INDEX CODE     - init code for INDEX~n"),
+    io:format("    --done       INDEX CODE     - done code for INDEX~n"),
+    io:format("    --init_runner  IND CODE     - init_runner code for INDEX~n"),
     io:format("Code examples: ~n"),
     io:format("    rand:uniform(123).~n"),
     io:format("    runner() -> timer:sleep(1).~n"),
-    io:format("    runner(Arg) -> Count = rand:uniform(Arg), [pg2:join(foo) ||_ <- lists:seq(1, Count)].~n");
+    io:format("    runner(Arg) -> Count = rand:uniform(Arg), [pg2:join(foo) ||_ <- lists:seq(1, Count)].~n"),
+    io:format("~n"),
+    io:format("Usage examples: ~n"),
+    io:format("erlperf 'timer:sleep(1).'~n"),
+    io:format("erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1~n"),
+    io:format("erlperf 'pg2:create(foo).' --squeeze~n"),
+    io:format("erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'~n");
 
 % wrong usage
 main_impl(_RunOpts, SqueezeOps, [_, _ | _]) when map_size(SqueezeOps) > 0 ->
     io:format("Multiple concurrency tests is not supported, run it one by one~n");
 
 main_impl(RunOpts, SqueezeOpts, Codes) ->
-    application:set_env(erlperf, start_monitor, false),
+    NeedLogger = maps:get(verbose, RunOpts, false),
+    application:set_env(erlperf, start_monitor, NeedLogger),
     NeedToStop =
         case application:start(erlperf) of
             ok ->
@@ -264,9 +287,18 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
             {error, {already_started,erlperf}} ->
                 false
         end,
+    % verbose?
+    Logger =
+        if NeedLogger ->
+            {ok, Pid} = ep_file_log:start(group_leader()),
+                Pid;
+            true ->
+                undefined
+        end,
     try
         run_main(RunOpts, SqueezeOpts, Codes)
     after
+        Logger =/= undefined andalso ep_file_log:stop(Logger),
         NeedToStop andalso application:stop(erlperf)
     end.
 
@@ -275,9 +307,10 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
 % pg2:create(foo).                      14      9540 Ki
 run_main(RunOpts, SqueezeOps, [Code]) when map_size(SqueezeOps) > 0 ->
     {QPS, Con} = run(Code, RunOpts, SqueezeOps),
-    MaxCodeLen = min(length(Code), 62),
+    #{runner := CodeRunner} = Code,
+    MaxCodeLen = min(length(CodeRunner), 62),
     io:format("~*s     ||        QPS~n", [-MaxCodeLen, "Code"]),
-    io:format("~*s ~6b ~10s~n", [-MaxCodeLen, Code, Con, format_number(QPS)]);
+    io:format("~*s ~6b ~10s~n", [-MaxCodeLen, CodeRunner, Con, format_number(QPS)]);
 
 % benchmark
 % erlperf 'timer:sleep(1).'
@@ -288,10 +321,11 @@ run_main(RunOpts, SqueezeOps, [Code]) when map_size(SqueezeOps) > 0 ->
 % rand:uniform().                        1      4303 Ki       100%
 % crypto:strong_rand_bytes(2).           1      1485 Ki        35%
 
-run_main(RunOpts, _, Codes) ->
-    Results = run_impl(Codes, RunOpts, undefined),
+run_main(RunOpts, _, Codes0) ->
+    Results = run_impl(Codes0, RunOpts, undefined),
     MaxQPS = lists:max(Results),
     Concurrency = maps:get(concurrency, RunOpts, 1),
+    Codes = [maps:get(runner, Code) || Code <- Codes0],
     MaxCodeLen = min(lists:max([length(Code) || Code <- Codes]) + 4, 62),
     io:format("~*s     ||        QPS     Rel~n", [-MaxCodeLen, "Code"]),
     Zipped = lists:reverse(lists:keysort(2, lists:zip(Codes, Results))),

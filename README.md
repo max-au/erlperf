@@ -13,8 +13,8 @@ Build:
 Find out how many times per second a function can be run  (beware of shell escaping your code!):
 
     $ ./erlperf 'timer:sleep(1).'
-    Code               Concurrency   Throughput
-    timer:sleep(1).              1          498
+    Code                    ||        QPS     Rel
+    timer:sleep(1).          1        500    100%
 
 Run erlperf with two concurrently running samples of code
 
@@ -23,11 +23,38 @@ Run erlperf with two concurrently running samples of code
     rand:uniform().                        1      4303 Ki       100%
     crypto:strong_rand_bytes(2).           1      1485 Ki        35%
 
-Or just measure how concurrent your code is:
+Or just measure how concurrent your code is (example below shows saturation with only 1 process):
 
-    $ ./erlperf 'pg2:create(foo).' --squeeze
-    Code                         Concurrency   Throughput
-    pg2:create(foo).                      14      9540 Ki
+    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --squeeze
+    Code                                               ||        QPS
+    pg2:join(foo, self()), pg2:leave(foo, self()).      1      29836
+    
+If you need some initialisation done before running the test:
+
+    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'
+    Code                                                   ||        QPS     Rel
+    pg2:join(foo, self()), pg2:leave(foo, self()).          1      30265    100%
+    
+Determine how well pg2 is able to have concurrent group modifications when there are no nodes in the cluster:
+
+    $ ./erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 1 'G = {foo, rand:uniform(10000)}, pg2:create(G), G.' -q
+    ode                                                               ||        QPS
+    runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg,     13      76501
+    
+Watch the progress of your test running (use -v option):
+
+    $ ./erlperf dane$ _build/default/bin/erlperf 'rand:uniform().' -q -v
+    
+    YYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS  <0.92.0>
+    2019-06-21T13:25:21-07:00  11.98   0.00   0.47       52        3      20  32451 Kb   4673 Kb    179 Kb    458 Kb    3761 Ki
+    2019-06-21T13:25:22-07:00  12.57   0.00   0.00       52        3      20  32702 Kb   4898 Kb    201 Kb    460 Kb    4343 Ki
+    <...>
+    2019-06-21T13:25:54-07:00 100.00   0.00   0.00       63        3      20  32839 Kb   4899 Kb    203 Kb    469 Kb   14296 Ki
+    2019-06-21T13:25:55-07:00 100.00   0.00   0.00       63        3      20  32814 Kb   4969 Kb    201 Kb    469 Kb   13810 Ki
+    2019-06-21T13:25:56-07:00 100.00   0.00   0.00       63        3      20  32809 Kb   4964 Kb    201 Kb    469 Kb   13074 Ki
+    Code                ||        QPS
+    rand:uniform().      8   14918 Ki
+    
 
 Command-line benchmarking does not save results anywhere. It is designed to provide a quick answer to the question
 "is that piece of code faster". 
@@ -70,7 +97,7 @@ Usage example (assuming you're running an OTP release, or rebar3 shell for you a
     
     % restart the job (code is saved for your convenience, and can be accessed by name)
     % makes it easy to restart the job if it crashed due to bad code loaded
-    > ep_job:start(ep_job:load(myname)).
+    > ep_job:start(erlperf:load(myname)).
     {ok,<0.1121.0>}
     
     % when finished, just shut everything down with one liner:

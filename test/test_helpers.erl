@@ -90,7 +90,7 @@ capture_io(Fun) when is_function(Fun) ->
 collect_io(Mref, Ack) ->
     receive
         {'DOWN', Mref, _,_,_} ->
-            lists:reverse(Ack);
+            lists:flatten(io_lib:format("~s", [lists:reverse(Ack)]));
         {io_request, From, Me, {put_chars, M, F, A}} ->
             From ! {io_reply, Me, ok},
             collect_io(Mref, [apply(M,F, A) | Ack]);

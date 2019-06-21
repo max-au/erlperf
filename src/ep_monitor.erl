@@ -79,7 +79,7 @@ init([]) ->
     {ok, #state{
         tick = Tick,
         jobs = Jobs,
-        next_tick = Next + Tick,
+        next_tick = Next,
         sched_data = lists:sort(erlang:statistics(scheduler_wall_time_all)),
         normal = erlang:system_info(schedulers),
         dcpu = erlang:system_info(dirty_cpu_schedulers)}
