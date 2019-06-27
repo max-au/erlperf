@@ -17,7 +17,9 @@
     stop/1,
     set_concurrency/2,
     info/1,
-    get_counters/1
+    get_counters/1,
+    profile/1,
+    profile/3
 ]).
 
 %% gen_server callbacks
@@ -95,6 +97,18 @@ info(JobId) ->
 get_counters(JobId) ->
     gen_server:call(JobId, get_counters).
 
+%% @doc
+%% Runs a single iteration, using fprof profiler
+-spec profile(pid()) -> term().
+profile(JobId) ->
+    profile(JobId, fprof, term).
+
+%% @doc
+%% Runs a profiler for a selected number of runner iterations.
+-spec profile(pid(), fprof, term | binary | string) -> term().
+profile(JobId, Profiler, Format) ->
+    profile_impl(gen_server:call(JobId, get_code), Profiler, Format).
+
 %%--------------------------------------------------------------------
 %% Internal definitions
 
@@ -146,6 +160,9 @@ handle_call(get_counters, _From, #state{cref = CRef} = State) ->
 
 handle_call({set_concurrency, Concurrency}, _From, State) ->
     {reply, ok, State#state{workers = set_concurrency_impl(Concurrency, State)}};
+
+handle_call(get_code, _From, #state{runner = Runner, init_runner = IR, init_result = IRR} = State) ->
+    {reply, {Runner, IR, IRR}, State};
 
 handle_call(_Request, _From, _State) ->
     error(badarg).
@@ -382,3 +399,84 @@ maybe_compile(Runner, Hooks) ->
         init_runner = ensure_loaded(maps:get(init_runner, Hooks, undefined)),
         done = ensure_loaded(maps:get(done, Hooks, undefined))
     }.
+
+%%%===================================================================
+%%% Profiling support
+
+profile_impl({Runner, InitRunner, InitResult}, fprof, Format) ->
+    run_fprof(Runner, InitRunner, InitResult, Format).
+
+ensure_fprof_started({ok, _Pid}) ->
+    ok;
+ensure_fprof_started({error, {already_started, _Pid}}) ->
+    ok;
+ensure_fprof_started(Error) ->
+    Error.
+
+run_fprof(Runner, InitRunner, InitResult, Format) ->
+    ok = ensure_fprof_started(fprof:start()),
+    IRR = call(InitRunner, InitResult),
+    case Runner of
+        {M, F, A} ->
+            case erlang:function_exported(M, F, length(A)) of
+                true ->
+                    fprof:apply(M, F, A);
+                false ->
+                    fprof:apply(M, F, A ++ [IRR])
+            end;
+        List when is_list(List) ->
+            fprof:trace(start),
+            _ = [erlang:apply(M, F, A) || {M, F, A} <- List],
+            fprof:trace(stop);
+        Fun when is_function(Fun, 0) ->
+            fprof:apply(Fun, []);
+        Fun when is_function(Fun) ->
+            fprof:apply(Fun, [IRR])
+    end,
+    ok = fprof:profile(),
+    % don't use file-base output, generate an Erlang structure
+    % TODO: this is quite a weird way, consult a text output...
+    TypeWriter = proc_lib:spawn_link(fun () -> capture_io([]) end),
+    ok = fprof:analyse([{dest, TypeWriter}]),
+    TypeWriter ! {read, self()},
+    receive
+        {result, Result} ->
+            process_fprof_result(Result, Format)
+    after 5000 ->
+        error(timeout)
+    end.
+
+process_fprof_result(Io, term) ->
+    {_, Terms} =
+        lists:foldl(
+            fun (S, {Cont, Acc}) ->
+                List = binary_to_list(S),
+                case erl_scan:tokens(Cont, List, 1, []) of
+                    {more, Cont1} ->
+                        {Cont1, Acc};
+                    {done, Term, LeftOver} ->
+                        {more, Cont1} = erl_scan:tokens([], LeftOver, 1, []),
+                        {ok, Term1, _} = Term,
+                        {ok, Term2} = erl_parse:parse_term(Term1),
+                        {Cont1, [Term2 | Acc]}
+                end
+            end, {[], []}, Io),
+    lists:reverse(Terms);
+process_fprof_result(Io, string) ->
+    [binary_to_list(S) || S <- Io];
+process_fprof_result(Io, binary) ->
+    Io.
+
+capture_io(Io) ->
+    receive
+        {io_request, From, Me, {put_chars, _Encoding, Binary}} ->
+            From ! {io_reply, Me, ok},
+            capture_io([iolist_to_binary(Binary) | Io]);
+        {io_request, From, Me, {put_chars, _Encoding, M, F, A}} ->
+            From ! {io_reply, Me, ok},
+            capture_io([iolist_to_binary(apply(M,F, A)) | Io]);
+        {read, WhereTo} ->
+            WhereTo ! {result, lists:reverse(Io)};
+        _Other ->
+            capture_io(Io)
+    end.

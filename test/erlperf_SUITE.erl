@@ -80,7 +80,8 @@ groups() ->
             cmd_line_squeeze,
             cmd_line_usage,
             cmd_line_init,
-            cmd_line_pg2
+            cmd_line_pg2,
+            cmd_line_profile
         ]},
         {squeeze, [], [
             mfa_squeeze
@@ -325,6 +326,16 @@ cmd_line_pg2(_Config) ->
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
     ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
+    ok.
+
+% profiler test
+cmd_line_profile(_Config) ->
+    Code = "runner(Arg)->ok=pg2:join(Arg,self()),ok=pg2:leave(Arg,self()).",
+    Out = test_helpers:capture_io(fun () -> erlperf:main(
+        [Code, "--init_runner", "1", "pg2:create(self()), self().", "--profile"])
+                                  end),
+    [LN1 | _] = string:split(Out, "\n"),
+    ?assertEqual("Reading trace data...", LN1),
     ok.
 
 formatters(_Config) ->

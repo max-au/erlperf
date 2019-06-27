@@ -20,7 +20,8 @@
     compare/2,
     record/4,
     start/2,
-    load/1
+    load/1,
+    profile/2
 ]).
 
 %% Public API: escript
@@ -89,6 +90,12 @@
 %%  amount of runners running at that time.
 -type concurrency_test_result() :: concurrency_result() | {Max :: concurrency_result(), [concurrency_result()]}.
 
+%% Profile options
+-type profile_options() :: #{
+    profiler => fprof,
+    format => term | binary | string
+}.
+
 -export_type([isolation/0, run_options/0, concurrency_test/0]).
 
 %% Milliseconds, timeout for any remote node operation
@@ -150,6 +157,17 @@ start(Code, _Isolation) ->
 load(Filename) ->
     {ok, Bin} = file:read_file(filename:join(code:priv_dir(erlperf), Filename)),
     binary_to_term(Bin).
+
+%% @doc
+%% Runs a profiler for specified code
+-spec profile(ep_job:code(), profile_options()) -> binary() | string() | [term()].
+profile(Code, Options) ->
+    {ok, Job} = ep_job:start_link(Code),
+    Profiler = maps:get(profiler, Options, fprof),
+    Format = maps:get(format, Options, string),
+    Result = ep_job:profile(Job, Profiler, Format),
+    ep_job:stop(Job),
+    Result.
 
 %% @doc
 %% Comparison run: starts several jobs and measures throughput for
@@ -222,6 +240,8 @@ parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--squeeze"; Op
     parse_cmd_line(Tail, {RunOpt, COpt#{min => maps:get(min, COpt, 1)}, Codes});
 parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--verbose"; Opt =:= "-v"  ->
     parse_cmd_line(Tail, {RunOpt#{verbose => true}, COpt, Codes});
+parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--profile"; Opt =:= "-p"  ->
+    parse_cmd_line(Tail, {RunOpt#{profiler => fprof}, COpt, Codes});
 % init/done/init_runner
 parse_cmd_line(["--init", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
     parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, init, Index0, Codes)});
@@ -301,6 +321,11 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
         Logger =/= undefined andalso ep_file_log:stop(Logger),
         NeedToStop andalso application:stop(erlperf)
     end.
+
+% profile
+run_main(#{profiler := Profiler}, _, [Code]) ->
+    Profile = erlperf:profile(Code, #{profiler => Profiler, format => string}),
+    io:format("~s~n", [Profile]);
 
 % squeeze test
 % Code                         Concurrency   Throughput
