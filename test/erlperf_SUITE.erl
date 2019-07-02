@@ -142,7 +142,7 @@ mfa_with_tiny_cv(_Config) ->
     ?assert(C > 250 andalso C < 1101).
 
 mfa_list(_Config) ->
-    C = erlperf:run([{rand, seed, [exrop, 1]}, {timer, sleep, [1]}, {rand, uniform, [20]}, {timer, sleep, [1]}]),
+    C = erlperf:run([{rand, seed, [exrop]}, {timer, sleep, [1]}, {rand, uniform, [20]}, {timer, sleep, [1]}]),
     ?assert(C > 200 andalso C < 450).
 
 mfa_fun(_Config) ->
