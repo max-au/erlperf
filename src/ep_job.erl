@@ -304,7 +304,86 @@ wait_for_killed([Pid | Tail]) ->
 %%% Compilation primitives
 %%%===================================================================
 
--define(IS_SOURCE(Text), is_list(Text), not is_tuple(hd(Text)), not is_function(hd(Text))).
+-define (IS_MFA(XXMFA), is_tuple(XXMFA); is_tuple(hd(XXMFA)); is_function(XXMFA); XXMFA =:= []; XXMFA =:= {[]}).
+
+maybe_compile(Code) when not is_map(Code) ->
+    maybe_compile(#{runner => Code});
+
+maybe_compile(#{runner := _Runner} = Code) ->
+    case need_compile(Code) of
+        false ->
+            #state{
+                runner = ensure_loaded(maps:get(runner, Code)),
+                init = ensure_loaded(maps:get(init, Code, undefined)),
+                init_runner = ensure_loaded(maps:get(init_runner, Code, undefined)),
+                done = ensure_loaded(maps:get(done, Code, undefined))
+            };
+        true ->
+            do_compile(Code)
+    end.
+
+need_compile(Code) ->
+    lists:any(
+        fun (FName) ->
+            case maps:find(FName, Code) of
+                {ok, MFA} when ?IS_MFA(MFA) ->
+                    false;
+                {ok, Text} when is_list(Text) ->
+                    true;
+                error ->
+                    true
+            end
+        end,
+        [runner, init, init_runner, done]).
+
+%% Some compilation needed
+do_compile(Code) ->
+    %
+    Mod = module_name(),
+    ModForm = {attribute, 1, module, Mod},
+    % make MFA (and forms if it's source code)
+    Runner = try_export(Mod, runner, Code),
+    Init = try_export(Mod, init, Code),
+    Done = try_export(Mod, done, Code),
+    InitRunner = try_export(Mod, init_runner, Code),
+    %
+    AllCodes = [Runner, Init, InitRunner, Done],
+    %
+    ExportForm = {attribute,1,export,[{Name, Arity} || {_, {Name, Arity, _}} <- AllCodes]},
+    %
+    AllForms = [ModForm, ExportForm | [Form || {_, {_, _, Form}} <- AllCodes]],
+    %
+    % ct:pal("Code: ~tp", [AllForms]),
+    %
+    {ok, App, Bin} = compile:forms(AllForms),
+    {module, Mod} = code:load_binary(App, atom_to_list(Mod), Bin),
+    #state{
+        module = Mod,
+        runner = ensure_callable(Runner),
+        init = ensure_callable(Init),
+        done = ensure_callable(Done),
+        init_runner = ensure_callable(InitRunner)
+    }.
+
+module_name() ->
+    list_to_atom(lists:flatten(io_lib:format("job_~p_~p", [node(), self()]))).
+
+%% Returns {fun/MFA, undefined | Abstract Form}
+-spec try_export(module(), atom(), map()) ->
+    undefined | {{module(), atom(), [term()]} | function(), undefined | erl_parse:abstract_form()}.
+try_export(Mod, Name, Map) ->
+    case maps:find(Name, Map) of
+        error ->
+            % no code defined
+            undefined;
+        {ok, Code} when ?IS_MFA(Code) ->
+            % MFA or MFAList
+            {Code, undefined};
+        {ok, Code} ->
+            % source code
+            {Name1, Arity, Form} = export(Name, Code),
+            {{Mod, Name1, []}, {Name1, Arity, Form}}
+    end.
 
 ensure_loaded({M, _, _} = MFA) when is_atom(M) ->
     case code:ensure_loaded(M) of
@@ -313,12 +392,8 @@ ensure_loaded({M, _, _} = MFA) when is_atom(M) ->
         {error, nofile} ->
             error({module_not_found, M})
     end;
-ensure_loaded([]) ->
+ensure_loaded(Empty) when Empty =:= []; Empty =:= {[]} ->
     error("empty callable");
-ensure_loaded({[]}) ->
-    error("empty callable");
-ensure_loaded(Other) when ?IS_SOURCE(Other) ->
-    error("cannot mix source and non-source forms");
 ensure_loaded(Other) ->
     Other.
 
@@ -342,63 +417,12 @@ export(DefaultName, Text) ->
             end
     end.
 
-try_export(Name, Map) when is_map_key(Name, Map) ->
-    export(Name, maps:get(Name, Map));
-try_export(_, _) ->
-    undefined.
-
-ensure_callable(_Mod, undefined) ->
+ensure_callable(undefined) ->
     undefined;
-ensure_callable(Mod, {Name, _, _}) ->
-    {Mod, Name, []}.
-
-module_name() ->
-    list_to_atom(lists:flatten(io_lib:format("job_~p_~p", [node(), self()]))).
-
-maybe_compile(#{runner := Runner} = Code) ->
-    maybe_compile(Runner, maps:remove(runner, Code));
-
-maybe_compile(Code) when not is_map(Code) ->
-    maybe_compile(Code, #{}).
-
-maybe_compile(Text, Hooks) when ?IS_SOURCE(Text) ->
-    %
-    Mod = module_name(),
-    %
-    ModForm = {attribute, 1, module, Mod},
-    % form source code
-    {RunnerName, _, _} = Runner = export(runner, Text),
-    % init/done
-    Init = try_export(init, Hooks),
-    Done = try_export(done, Hooks),
-    InitRunner = try_export(init_runner, Hooks),
-    %
-    Forms = [Runner, Init, InitRunner, Done],
-    %
-    ExportForm = {attribute,1,export,[{Name, Arity} || {Name, Arity, _} <- Forms]},
-    %
-    AllForms = [ModForm, ExportForm | [Form || {_, _, Form} <- Forms]],
-    %
-    % ct:pal("Code: ~tp", [AllForms]),
-    %
-    {ok, App, Bin} = compile:forms(AllForms),
-    {module, Mod} = code:load_binary(App, atom_to_list(Mod), Bin),
-    #state{
-        module = Mod,
-        runner = {Mod, RunnerName, []},
-        init = ensure_callable(Mod, Init),
-        done = ensure_callable(Mod, Done),
-        init_runner = ensure_callable(Mod, InitRunner)
-    };
-
-%% No compilation required
-maybe_compile(Runner, Hooks) ->
-    #state{
-        runner = ensure_loaded(Runner),
-        init = ensure_loaded(maps:get(init, Hooks, undefined)),
-        init_runner = ensure_loaded(maps:get(init_runner, Hooks, undefined)),
-        done = ensure_loaded(maps:get(done, Hooks, undefined))
-    }.
+ensure_callable({[], _}) ->
+    error("empty callable");
+ensure_callable({MFA, _}) ->
+    ensure_loaded(MFA).
 
 %%%===================================================================
 %%% Profiling support

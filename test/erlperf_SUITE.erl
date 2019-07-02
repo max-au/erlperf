@@ -68,6 +68,7 @@ groups() ->
             mfa_concurrency,
             mfa_no_concurrency,
             code_extra_node,
+            mixed,
             crasher, undefer,
             compare,
             errors,
@@ -81,6 +82,8 @@ groups() ->
             cmd_line_usage,
             cmd_line_init,
             cmd_line_pg2,
+            cmd_line_mfa,
+            cmd_line_recorded,
             cmd_line_profile
         ]},
         {squeeze, [], [
@@ -220,6 +223,17 @@ crasher(_Config) ->
     C = erlperf:run({erlang, throw, [ball]}, #{concurrency => 2}),
     ?assertEqual(0, C).
 
+mixed() ->
+    [{doc, "Tests mixed approach when code co-exists with MFAs"}].
+
+mixed(_Config) ->
+    C = erlperf:run(#{
+        runner => [{timer, sleep, [1]}, {timer, sleep, [2]}],
+        init => "rand:uniform().",
+        init_runner => fun (Int) -> Int end
+    }),
+    ?assert(C > 100 andalso C < 335).
+
 undefer() ->
     [{doc, "Tests job undefs - e.g. wrong module name"}].
 
@@ -237,8 +251,6 @@ errors() ->
 errors(_Config) ->
     ?assertException(error, {badmatch, {error, {"empty callable", _}}},
         erlperf:run(#{runner => {erlang, node, []}, init => []})),
-    ?assertException(error, {badmatch, {error, {"cannot mix source and non-source forms", _}}},
-        erlperf:run(#{runner => {erlang, node, []}, init => "init() -> ok."})),
     ?assertException(error, {badmatch, {error, {"empty callable", _}}},
         erlperf:run(#{runner => []})),
     ?assertException(error, {badmatch, {error, {"empty callable", _}}},
@@ -326,6 +338,39 @@ cmd_line_pg2(_Config) ->
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
     ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
+    ok.
+
+% erlperf '{rand, uniform, [100]}'
+cmd_line_mfa(_Config) ->
+    Code = "{rand,uniform,[4]}",
+    Out = test_helpers:capture_io(fun () -> erlperf:main([Code]) end),
+    [LN1, LN2] = string:split(Out, "\n"),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch([Code, "1" | _], string:lexemes(LN2, " ")),
+    ok.
+
+% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 1 'ets:file2tab("pg2.tab").'
+cmd_line_recorded(Config) ->
+    % write down ETS table to file
+    EtsFile = filename:join(?config(priv_dir, Config), "ets.tab"),
+    RecFile = filename:join(?config(priv_dir, Config), "recorded.list"),
+    test_ets_tab = ets:new(test_ets_tab, [named_table, public, ordered_set]),
+    [true = ets:insert(test_ets_tab, {N, rand:uniform(100)}) || N <- lists:seq(1, 100)],
+    ok = ets:tab2file(test_ets_tab, EtsFile),
+    true = ets:delete(test_ets_tab),
+    %
+    ok = file:write_file(RecFile, term_to_binary(
+        [
+            {ets, insert, [test_ets_tab, {100, 40}]},
+            {ets, delete, [test_ets_tab, 100]}
+        ])),
+    %
+    Out = test_helpers:capture_io(fun () -> erlperf:main(
+        [RecFile, "--init", "1", "ets:file2tab(\"" ++ EtsFile ++ "\")."])
+                                  end),
+    [LN1, LN2] = string:split(Out, "\n"),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch(["[{ets,insert,[test_ets_tab,{100,40}]},", "...]", "1" | _], string:lexemes(LN2, " ")),
     ok.
 
 % profiler test

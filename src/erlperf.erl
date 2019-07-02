@@ -255,7 +255,28 @@ parse_cmd_line([[$- | Opt] | _Tail], _) ->
     {#{}, #{}, []};
 % Code
 parse_cmd_line([Code | Tail], {RunOpt, COpt, Codes}) ->
-    parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => Code}]}).
+    case lists:last(Code) of
+        $. ->
+            parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => Code}]});
+        $} when hd(Code) =:= ${ ->
+            % parse MFA tuple with added "."
+            parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => parse_mfa_tuple(Code)}]});
+        _ ->
+            case file:read_file(Code) of
+                {ok, Bin} ->
+                    parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => parse_call_record(Bin)}]});
+                Other ->
+                    error({"Unable to read file with call recording", Code, Other})
+            end
+    end.
+
+parse_mfa_tuple(Code) ->
+    {ok, Scan, _} = erl_scan:string(Code ++ "."),
+    {ok, Term} = erl_parse:parse_term(Scan),
+    Term.
+
+parse_call_record(Bin) ->
+    binary_to_term(Bin).
 
 replace_code(Code, Type, IndexString, Codes) ->
     Index = list_to_integer(IndexString),
@@ -333,9 +354,9 @@ run_main(#{profiler := Profiler}, _, [Code]) ->
 run_main(RunOpts, SqueezeOps, [Code]) when map_size(SqueezeOps) > 0 ->
     {QPS, Con} = run(Code, RunOpts, SqueezeOps),
     #{runner := CodeRunner} = Code,
-    MaxCodeLen = min(length(CodeRunner), 62),
+    MaxCodeLen = min(code_length(CodeRunner), 62),
     io:format("~*s     ||        QPS~n", [-MaxCodeLen, "Code"]),
-    io:format("~*s ~6b ~10s~n", [-MaxCodeLen, CodeRunner, Con, format_number(QPS)]);
+    io:format("~*s ~6b ~10s~n", [-MaxCodeLen, format_code(CodeRunner), Con, format_number(QPS)]);
 
 % benchmark
 % erlperf 'timer:sleep(1).'
@@ -351,11 +372,22 @@ run_main(RunOpts, _, Codes0) ->
     MaxQPS = lists:max(Results),
     Concurrency = maps:get(concurrency, RunOpts, 1),
     Codes = [maps:get(runner, Code) || Code <- Codes0],
-    MaxCodeLen = min(lists:max([length(Code) || Code <- Codes]) + 4, 62),
+    MaxCodeLen = min(lists:max([code_length(Code) || Code <- Codes]) + 4, 62),
     io:format("~*s     ||        QPS     Rel~n", [-MaxCodeLen, "Code"]),
     Zipped = lists:reverse(lists:keysort(2, lists:zip(Codes, Results))),
-    [io:format("~*s ~6b ~10s ~6b%~n", [-MaxCodeLen, Code, Concurrency, format_number(QPS), QPS * 100 div MaxQPS]) ||
+    [io:format("~*s ~6b ~10s ~6b%~n", [-MaxCodeLen, format_code(Code),
+        Concurrency, format_number(QPS), QPS * 100 div MaxQPS]) ||
         {Code, QPS}  <- Zipped].
+
+format_code(Code) when is_tuple(Code) ->
+    lists:flatten(io_lib:format("~tp", [Code]));
+format_code(Code) when is_tuple(hd(Code)) ->
+    lists:flatten(io_lib:format("[~tp, ...]", [hd(Code)]));
+format_code(Code) ->
+    Code.
+
+code_length(Code) ->
+    length(format_code(Code)).
 
 %%%===================================================================
 %%% Benchmarking itself
