@@ -63,7 +63,7 @@ Command-line benchmarking does not save results anywhere. It is designed to prov
 Starting erlperf as an Erlang application enables continuous benchmarking. This process is designed to help during
 development and testing stages, allowing to quickly notice performance regressions.
  
-Usage example (assuming you're running an OTP release, or rebar3 shell for you application):
+Usage example (assuming you're running an OTP release, or rebar3 shell for your application):
 
     $ rebar3 shell --sname mynode
     > application:start(erlperf).
