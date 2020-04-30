@@ -260,12 +260,15 @@ mfa_squeeze() ->
     [{timetrap, {seconds, 120}}].
 
 mfa_squeeze(_Config) ->
-    ?assert(erlang:system_info(schedulers_online) > 1), % makes no sense to run with 1 scheduler
-    {QPS, CPU} = erlperf:run({rand, uniform, [1]}, #{sample_duration => 50, warmup => 1}, #{}),
-    HaveCPU = erlang:system_info(schedulers_online),
-    ct:pal("Schedulers: ~b, detected: ~p, QPS: ~p", [HaveCPU, CPU, QPS]),
-    ?assert(QPS > 0),
-    ?assert(CPU > 1).
+    case erlang:system_info(schedulers_online) of
+        LowCPU when LowCPU < 3 ->
+            skip;
+        HaveCPU ->
+            {QPS, CPU} = erlperf:run({rand, uniform, [1]}, #{sample_duration => 50, warmup => 1}, #{}),
+            ct:pal("Schedulers: ~b, detected: ~p, QPS: ~p", [HaveCPU, CPU, QPS]),
+            ?assert(QPS > 0),
+            ?assert(CPU > 1)
+    end.
 
 %%--------------------------------------------------------------------
 %% command-line testing

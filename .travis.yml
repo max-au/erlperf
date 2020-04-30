@@ -5,7 +5,6 @@ notifications:
 otp_release:
   - 22.0
   - 21.2
-  - 20.0
 script: "wget https://s3.amazonaws.com/rebar3/rebar3 && escript rebar3 do ct"
 branches:
   only:

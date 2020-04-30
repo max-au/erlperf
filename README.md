@@ -25,19 +25,19 @@ Run erlperf with two concurrently running samples of code
 
 Or just measure how concurrent your code is (example below shows saturation with only 1 process):
 
-    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --squeeze
+    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 'pg2:create(foo).' --squeeze
     Code                                               ||        QPS
     pg2:join(foo, self()), pg2:leave(foo, self()).      1      29836
     
 If you need some initialisation done before running the test:
 
-    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'
+    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 'pg2:create(foo).' --done 'pg2:delete(foo).'
     Code                                                   ||        QPS     Rel
     pg2:join(foo, self()), pg2:leave(foo, self()).          1      30265    100%
     
 Determine how well pg2 is able to have concurrent group modifications when there are no nodes in the cluster:
 
-    $ ./erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 1 'G = {foo, rand:uniform(10000)}, pg2:create(G), G.' -q
+    $ ./erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 'G = {foo, rand:uniform(10000)}, pg2:create(G), G.' -q
     ode                                                               ||        QPS
     runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg,     13      76501
     
