@@ -1,1 +1,8 @@
-[].
+{"1.2.0",
+[{<<"argparse">>,{pkg,<<"argparse">>,<<"0.2.0">>},0}]}.
+[
+{pkg_hash,[
+ {<<"argparse">>, <<"F2A957FC296082D56031486BFAA5D2EB57B656F1934536034A9937AC4D137067">>}]},
+{pkg_hash_ext,[
+ {<<"argparse">>, <<"DE25160E1FE9C963C7B732E3C4B1327477772AAE0C6CE510B0E171C4D7730F94">>}]}
+].

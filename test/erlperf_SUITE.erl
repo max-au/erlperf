@@ -310,16 +310,17 @@ cmd_line_squeeze(_Config) ->
 % erlperf -q
 cmd_line_usage(_Config) ->
     Out = test_helpers:capture_io(fun () -> erlperf:main(["-q"]) end),
-    ?assertEqual("Usage", lists:sublist(Out, 5)),
+    Line1 = "error: erlperf: required argument missing: code",
+    ?assertEqual(Line1, lists:sublist(Out, length(Line1))),
     Out2 = test_helpers:capture_io(fun () -> erlperf:main(["--un code"]) end),
-    ?assertEqual("Unrecognised", lists:sublist(Out2, 12)),
+    ?assertEqual("error: erlperf: unrecognised argument: --un code", lists:sublist(Out2, 48)),
     ok.
 
-% erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'
+% erlperf 'true = ets:insert(foo, {1, self()}), ets:delete(foo, 1).' --init 'ets:new(foo, [named_table, public]).' --done 'ets:delete(foo).'
 cmd_line_init(_Config) ->
     Code = "pg2:join(foo,self()),pg2:leave(foo,self()).",
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init", "1", "pg2:create(foo).", "--done", "1", "pg2:delete(foo)."])
+        [Code, "--init", "pg2:create(foo).", "--done", "pg2:delete(foo)."])
                                   end),
     % verify 'done' was done
     ?assertEqual({error,{no_such_group,foo}}, pg2:get_members(foo)),
@@ -329,11 +330,11 @@ cmd_line_init(_Config) ->
     ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
     ok.
 
-% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 1 'pg2:create(self()), self().'
+% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 'pg2:create(self()), self().'
 cmd_line_pg2(_Config) ->
     Code = "runner(Arg)->ok=pg2:join(Arg,self()),ok=pg2:leave(Arg,self()).",
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init_runner", "1", "pg2:create(self()), self()."])
+        [Code, "--init_runner", "pg2:create(self()), self()."])
                                   end),
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
@@ -349,7 +350,7 @@ cmd_line_mfa(_Config) ->
     ?assertMatch([Code, "1" | _], string:lexemes(LN2, " ")),
     ok.
 
-% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 1 'ets:file2tab("pg2.tab").'
+% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 'ets:file2tab("pg2.tab").'
 cmd_line_recorded(Config) ->
     % write down ETS table to file
     EtsFile = filename:join(?config(priv_dir, Config), "ets.tab"),
@@ -366,7 +367,7 @@ cmd_line_recorded(Config) ->
         ])),
     %
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [RecFile, "--init", "1", "ets:file2tab(\"" ++ EtsFile ++ "\")."])
+        [RecFile, "--init", "ets:file2tab(\"" ++ EtsFile ++ "\")."])
                                   end),
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
@@ -377,7 +378,7 @@ cmd_line_recorded(Config) ->
 cmd_line_profile(_Config) ->
     Code = "runner(Arg)->ok=pg2:join(Arg,self()),ok=pg2:leave(Arg,self()).",
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init_runner", "1", "pg2:create(self()), self().", "--profile"])
+        [Code, "--init_runner", "pg2:create(self()), self().", "--profile"])
                                   end),
     [LN1 | _] = string:split(Out, "\n"),
     ?assertEqual("Reading trace data...", LN1),

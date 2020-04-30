@@ -355,8 +355,21 @@ do_compile(Code) ->
     %
     % ct:pal("Code: ~tp", [AllForms]),
     %
-    {ok, App, Bin} = compile:forms(AllForms),
-    {module, Mod} = code:load_binary(App, atom_to_list(Mod), Bin),
+    {module, Mod} =
+        case compile:forms(AllForms, [return]) of
+            {ok, App, Bin} ->
+                code:load_binary(App, atom_to_list(Mod), Bin);
+            {ok, App, Bin, Ws} ->
+                [?LOG_WARNING("~s:~b ~s", [F, Line, CompileMod:format_error(Desc)])
+                    || {F, Is} <- Ws, {Line, CompileMod, Desc} <- Is],
+                code:load_binary(App, atom_to_list(Mod), Bin);
+            {error, Errors, Ws} ->
+                [?LOG_WARNING("~s:~b ~s", [F, Line, CompileMod:format_error(Desc)])
+                    || {F, Is} <- Ws, {Line, CompileMod, Desc} <- Is],
+                Errors = lists:flatten([io_lib:format("~s:~b ~s", [F, Line, CompileMod:format_error(Desc)])
+                    || {F, Is} <- Ws, {Line, CompileMod, Desc} <- Is]),
+                error({compiler, Errors})
+        end,
     #state{
         module = Mod,
         runner = ensure_callable(Runner),
@@ -412,8 +425,9 @@ export(DefaultName, Text) ->
                     Form = {function, 1, DefaultName, 0,
                         [{clause,1,[],[], Clauses}]},
                     {DefaultName, 0, Form};
-                Error ->
-                    error(Error)
+                {error, {_Line, ParseMod, Es}} ->
+                    Errors = ParseMod:format_error(Es),
+                    error({parse, Errors})
             end
     end.
 

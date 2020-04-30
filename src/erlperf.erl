@@ -31,6 +31,7 @@
 
 %% Formatters & convenience functions.
 -export([
+    format/3,
     format_number/1,
     format_size/1
 ]).
@@ -182,8 +183,131 @@ compare(Codes, RunOptions) ->
 %% Example: erlperf 'rand:uniform().'
 -spec main([string()]) -> no_return().
 main(Args) ->
-    {RunOpts, ConcurrencyOpts, Code} =  parse_cmd_line(Args, {#{}, #{}, []}),
-    main_impl(RunOpts, ConcurrencyOpts, Code).
+    Prog = #{progname => "erlperf"},
+    try
+        erlang:process_flag(trap_exit, true),
+        RunOpts = argparse:parse(Args, arguments(), Prog),
+        Code0 = [parse_code(C) || C <- maps:get(code, RunOpts)],
+        {_, Code} = lists:foldl(fun callable/2, {RunOpts, Code0}, [init, init_runner, done]),
+        COpts = case maps:find(squeeze, RunOpts) of
+                    {ok, true} ->
+                        maps:with([min, max, threshold], RunOpts);
+                    error ->
+                        #{}
+                end,
+        ROpts = maps:with([concurrency, samples, sample_duration, cv, isolation, warmup, verbose, profile],
+            RunOpts),
+        main_impl(ROpts, COpts, Code)
+    catch
+        error:{argparse, Reason} ->
+            Fmt = argparse:format_error(Reason, arguments(), Prog),
+            io:format("error: ~s", [Fmt]);
+        error:{badmatch, {error, {{parse, Reason}, _}}} ->
+            format(error, "parse error: ~s~n", [Reason]);
+        error:{badmatch, {error, {{compile, Reason}, _}}} ->
+            format(error, "compile error: ~s~n", [Reason]);
+        error:{badmatch, {error, {Reason, Stack}}} ->
+            format(error, "error starting job: ~ts~n~p~n", [Reason, Stack]);
+        Cls:Rsn:Stack ->
+            format(error, "Unhandled exception: ~ts:~p~n~p~n", [Cls, Rsn, Stack])
+    end.
+
+callable(Type, {Args, Acc}) ->
+    {Args, merge_callable(Type, maps:get(Type, Args, []), Acc, [])}.
+
+merge_callable(_Type, [], Acc, Merged) ->
+    lists:reverse(Merged) ++ Acc;
+merge_callable(_Type, _, [], Merged) ->
+    lists:reverse(Merged);
+merge_callable(Type, [H | T], [HA | Acc], Merged) ->
+    merge_callable(Type, T, Acc, [HA#{Type => H} | Merged]).
+
+parse_code(Code) ->
+    case lists:last(Code) of
+        $. ->
+            #{runner => Code};
+        $} when hd(Code) =:= ${ ->
+            % parse MFA tuple with added "."
+            #{runner => parse_mfa_tuple(Code)};
+        _ ->
+            case file:read_file(Code) of
+                {ok, Bin} ->
+                    #{runner => parse_call_record(Bin)};
+                Other ->
+                    error({"Unable to read file with call recording", Code, Other})
+            end
+    end.
+
+parse_mfa_tuple(Code) ->
+    {ok, Scan, _} = erl_scan:string(Code ++ "."),
+    {ok, Term} = erl_parse:parse_term(Scan),
+    Term.
+
+parse_call_record(Bin) ->
+    binary_to_term(Bin).
+
+arguments() ->
+    #{help =>
+    "erlperf 'timer:sleep(1).'\n"
+    "erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1\n"
+    "erlperf 'pg2:create(foo).' --squeeze\n"
+    "erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'\n",
+        arguments => [
+            #{name => concurrency, short => $c, long => "-concurrency",
+                help => "number of concurrencly execured runner processes",
+                default => 1, type => {int, [{min, 1}, {max, 1024 * 1024 * 1024}]}},
+            #{name => sample_duration, short => $d, long => "-duration",
+                help => "single sample duration", default => 1000,
+                type => {int, [{min, 1}]}},
+            #{name => samples, short => $s, long => "-samples",
+                help => "minimum number of samples to collect", default => 3,
+                type => {int, [{min, 1}]}},
+            #{name => warmup, short => $w, long => "-warmup",
+                help => "number of samples to skip", default => 0,
+                type => {int, [{min, 0}]}},
+            #{name => cv, long => "-cv",
+                help => "coefficient of variation",
+                type => {float, [{min, 0.0}]}},
+            #{name => verbose, short => $v, long => "-verbose",
+                type => boolean, help => "verbose output"},
+            #{name => profile, long => "-profile", type => boolean,
+                help => "run fprof profiler for the supplied code"},
+            #{name => isolated, short => $i, long => "-isolated", type => boolean,
+                action => count, help => "run benchmarks in isolated environment (slave node)"},
+            #{name => squeeze, short => $q, long => "-squeeze", type => boolean,
+                action => count, help => "run concurrency test"},
+            #{name => min, long => "-min",
+                help => "start with this amount of processes", default => 1,
+                type => {int, [{min, 1}]}},
+            #{name => max, long => "-max",
+                help => "do not exceed this number of processes",
+                type => {int, [{max, 1024 * 1024 * 1024}]}},
+            #{name => threshold, short => $t, long => "-threshold",
+                help => "cv at least <threshold> samples should be less than <cv> to increase concurrency", default => 3,
+                type => {int, [{min, 1}]}},
+            #{name => init, long => "-init",
+                help => "init code", nargs => 1},
+            #{name => done, long => "-done",
+                help => "done code", nargs => 1},
+            #{name => init_runner, long => "-init_runner",
+                help => "init_runner code", nargs => 1},
+            #{name => code,
+                help => "code to test", nargs => nonempty_list}
+        ]}.
+
+%%-------------------------------------------------------------------
+%% Color output
+format(Level, Format, Terms) ->
+    io:format(color(Level, Format), Terms).
+
+-define(RED, "\e[31m").
+-define(MAGENTA, "\e[35m").
+-define(END, "\e[0m~n").
+
+color(error, Text) -> ?RED ++ Text ++ ?END;
+color(warning, Text) -> ?MAGENTA ++ Text ++ ?END;
+color(_, Text) -> Text.
+
 
 %% @doc Formats number rounded to 3 digits.
 %%  Example: 88 -> 88, 880000 -> 880 Ki, 100501 -> 101 Ki
@@ -210,110 +334,6 @@ format_size(Num) when Num > 1024 * 100 ->
 format_size(Num) ->
     integer_to_list(Num).
 
-%%%===================================================================
-%%% Command line implementation
-%%% ArgParse library is not ready yet, so do home-made parsing
-
-parse_cmd_line([], {RunOpt, COpt, Codes}) ->
-    {RunOpt, COpt, Codes};
-% run options
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--concurrency"; Opt =:= "-c" ->
-    parse_cmd_line(Tail, {RunOpt#{concurrency => list_to_integer(Number)}, COpt, Codes});
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--sample_duration"; Opt =:= "-d"  ->
-    parse_cmd_line(Tail, {RunOpt#{sample_duration => list_to_integer(Number)}, COpt, Codes});
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--warmup"; Opt =:= "-w"  ->
-    parse_cmd_line(Tail, {RunOpt#{warmup => list_to_integer(Number)}, COpt, Codes});
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--samples"; Opt =:= "-s"  ->
-    parse_cmd_line(Tail, {RunOpt#{samples => list_to_integer(Number)}, COpt, Codes});
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--cv" ->
-    parse_cmd_line(Tail, {RunOpt#{cv => list_to_float(Number)}, COpt, Codes});
-parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--isolated"; Opt =:= "-i" ->
-    parse_cmd_line(Tail, {RunOpt#{isolation => node}, COpt, Codes});
-% squeeze options
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--min" ->
-    parse_cmd_line(Tail, {RunOpt, COpt#{min => list_to_integer(Number)}, Codes});
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--max" ->
-    parse_cmd_line(Tail, {RunOpt, COpt#{max => list_to_integer(Number)}, Codes});
-parse_cmd_line([Opt, Number | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--threshold"; Opt =:= "-t" ->
-    parse_cmd_line(Tail, {RunOpt, COpt#{threshold => list_to_integer(Number)}, Codes});
-parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--squeeze"; Opt =:= "-q"  ->
-    parse_cmd_line(Tail, {RunOpt, COpt#{min => maps:get(min, COpt, 1)}, Codes});
-parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--verbose"; Opt =:= "-v"  ->
-    parse_cmd_line(Tail, {RunOpt#{verbose => true}, COpt, Codes});
-parse_cmd_line([Opt | Tail], {RunOpt, COpt, Codes}) when Opt =:= "--profile"; Opt =:= "-p"  ->
-    parse_cmd_line(Tail, {RunOpt#{profiler => fprof}, COpt, Codes});
-% init/done/init_runner
-parse_cmd_line(["--init", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
-    parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, init, Index0, Codes)});
-parse_cmd_line(["--done", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
-    parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, done, Index0, Codes)});
-parse_cmd_line(["--init_runner", Index0, Code | Tail], {RunOpt, COpt, Codes}) ->
-    parse_cmd_line(Tail, {RunOpt, COpt, replace_code(Code, init_runner, Index0, Codes)});
-% invalid options
-parse_cmd_line([[$- | Opt] | _Tail], _) ->
-    io:format("Unrecognised option: ~s~n", [Opt]),
-    {#{}, #{}, []};
-% Code
-parse_cmd_line([Code | Tail], {RunOpt, COpt, Codes}) ->
-    case lists:last(Code) of
-        $. ->
-            parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => Code}]});
-        $} when hd(Code) =:= ${ ->
-            % parse MFA tuple with added "."
-            parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => parse_mfa_tuple(Code)}]});
-        _ ->
-            case file:read_file(Code) of
-                {ok, Bin} ->
-                    parse_cmd_line(Tail, {RunOpt, COpt, Codes ++ [#{runner => parse_call_record(Bin)}]});
-                Other ->
-                    error({"Unable to read file with call recording", Code, Other})
-            end
-    end.
-
-parse_mfa_tuple(Code) ->
-    {ok, Scan, _} = erl_scan:string(Code ++ "."),
-    {ok, Term} = erl_parse:parse_term(Scan),
-    Term.
-
-parse_call_record(Bin) ->
-    binary_to_term(Bin).
-
-replace_code(Code, Type, IndexString, Codes) ->
-    Index = list_to_integer(IndexString),
-    {L, R} = lists:split(Index, Codes),
-    OldRunner = lists:last(L),
-    lists:droplast(L) ++ [OldRunner#{Type => Code}] ++ R.
-
-main_impl(_, _, []) ->
-    io:format("Usage: erlperf [OPTIONS] CODE1 [CODE2]~n"),
-    io:format("Options: ~n"),
-    io:format("    -c, --concurrency  PROCS    - number of concurrencly execured runner processes (default 1)~n"),
-    io:format("    -d, --duration     MILLISEC - single sample duration (default 1000)~n"),
-    io:format("    -s, --samples      SAMPLES  - minimum number of samples to collect (default 3)~n"),
-    io:format("    -w, --warmup       SAMPLES  - number of samples to skip (default 0)~n"),
-    io:format("    --cv               FLOAT    - coefficient of variation (not used by default)~n"),
-    io:format("    -v, --verbose               - additional output printed~n"),
-    io:format("    -i, --isolated              - run benchmarks in isolated environment (slave node)~n"),
-    io:format("Concurrency measurement options: ~n"),
-    io:format("    -q, --squeeze               - run concurrency test~n"),
-    io:format("    --min              PROCS    - start with this amount of processes (default 1)~n"),
-    io:format("    --max              PROCS    - stop squueze test after reaching this value~n"),
-    io:format("    -t, --threshold    SAMPLES  - collect more samples for squeeze test (default 3)~n"),
-    io:format("Runner hooks: ~n"),
-    io:format("    --init       INDEX CODE     - init code for INDEX~n"),
-    io:format("    --done       INDEX CODE     - done code for INDEX~n"),
-    io:format("    --init_runner  IND CODE     - init_runner code for INDEX~n"),
-    io:format("Code examples: ~n"),
-    io:format("    rand:uniform(123).~n"),
-    io:format("    runner() -> timer:sleep(1).~n"),
-    io:format("    runner(Arg) -> Count = rand:uniform(Arg), [pg2:join(foo) ||_ <- lists:seq(1, Count)].~n"),
-    io:format("~n"),
-    io:format("Usage examples: ~n"),
-    io:format("erlperf 'timer:sleep(1).'~n"),
-    io:format("erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1~n"),
-    io:format("erlperf 'pg2:create(foo).' --squeeze~n"),
-    io:format("erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'~n");
-
 % wrong usage
 main_impl(_RunOpts, SqueezeOps, [_, _ | _]) when map_size(SqueezeOps) > 0 ->
     io:format("Multiple concurrency tests is not supported, run it one by one~n");
@@ -321,6 +341,7 @@ main_impl(_RunOpts, SqueezeOps, [_, _ | _]) when map_size(SqueezeOps) > 0 ->
 main_impl(RunOpts, SqueezeOpts, Codes) ->
     NeedLogger = maps:get(verbose, RunOpts, false),
     application:set_env(erlperf, start_monitor, NeedLogger),
+    ok = logger:set_handler_config(default, level, warning),
     NeedToStop =
         case application:start(erlperf) of
             ok ->
@@ -344,8 +365,8 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
     end.
 
 % profile
-run_main(#{profiler := Profiler}, _, [Code]) ->
-    Profile = erlperf:profile(Code, #{profiler => Profiler, format => string}),
+run_main(#{profile := true}, _, [Code]) ->
+    Profile = erlperf:profile(Code, #{profiler => fprof, format => string}),
     io:format("~s~n", [Profile]);
 
 % squeeze test
