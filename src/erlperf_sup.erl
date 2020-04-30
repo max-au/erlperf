@@ -17,11 +17,11 @@
 
 -include("monitor.hrl").
 
--define(SERVER, ?MODULE).
-
+-spec start_link() -> supervisor:startlink_ret().
 start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+-spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
     SupFlags = #{strategy => rest_for_one,
                  intensity => 2,

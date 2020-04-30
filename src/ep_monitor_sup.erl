@@ -19,19 +19,20 @@
 
 -include("monitor.hrl").
 
--define(SERVER, ?MODULE).
-
+-spec start_link() -> supervisor:startlink_ret().
 start_link() ->
     case application:get_env(start_monitor) of
         {ok, false} ->
             ignore;
         _ ->
-            supervisor:start_link({local, ?SERVER}, ?MODULE, [])
+            supervisor:start_link({local, ?MODULE}, ?MODULE, [])
     end.
 
+-spec start_link(RegName :: atom(), LogTo :: ep_file_log | ep_cluster_monitor) -> supervisor:startlink_ret().
 start_link(Sup, Log) ->
     supervisor:start_link({local, Sup}, ?MODULE, Log).
 
+-spec init(ep_file_log | ep_cluster_monitor | []) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init(Log) when Log =:= ep_file_log; Log =:= ep_cluster_monitor ->
     SupFlags = #{
         strategy => simple_one_for_one,

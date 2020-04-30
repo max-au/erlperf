@@ -43,7 +43,10 @@ start_link() ->
 -record(state, {
 }).
 
+-type state() :: #state{}.
+
 %% gen_server init
+-spec init([]) -> {ok, state()}.
 init([]) ->
     pg2:create(?HISTORY_PROCESS_GROUP), % more like "ensure created"
     ep_event_handler:subscribe(?SYSTEM_EVENT),
@@ -52,6 +55,7 @@ init([]) ->
 handle_call(_Request, _From, _State) ->
     error(badarg).
 
+-spec handle_cast(term(), state()) -> no_return().
 handle_cast(_Request, _State) ->
     error(badarg).
 

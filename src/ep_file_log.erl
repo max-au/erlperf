@@ -66,9 +66,9 @@ stop(Pid) ->
     % file descriptor
     log_file :: file:io_device(),
     % current format line
-    format :: string(),
+    format = "" :: string(),
     % saved list of job IDs executed previously
-    jobs = [] :: [integer()]
+    jobs = [] :: [job_sample()]
 }).
 
 %% gen_server init

@@ -63,7 +63,7 @@
 }.
 
 %% Progress callback: MF & initial state.
--type progress_callback() :: {module(), atom(), term()}.
+-type progress_callback() :: silent | {module(), atom(), term()}.
 
 %% Result of time/1,4 call.
 -type module_time() :: {Module :: module(),
@@ -126,7 +126,7 @@ trace(TimeMs, PidPortSpec, MFAList, Progress) ->
     erlang:trace(PidPortSpec, false, [call]),
     Data = collect_impl(TracerPid, Progress),
     erlang:trace_pattern({'_', '_', '_'}, false, [local, call_time]),
-    {Counts, #{}} = fetch_trace(TracerPid, Progress, infinity),
+    {Counts, #{}} = fetch_trace(TracerPid, Progress, 240000),
     Callers = collect_callers(Counts),
     process_callers(Data, Callers).
 

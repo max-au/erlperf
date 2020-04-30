@@ -129,6 +129,8 @@ run(Code, RunOptions, ConTestOpts) ->
 
 %% @doc
 %% Records call trace, so it could be used to benchmark later.
+-spec record(module(), atom(), non_neg_integer(), pos_integer()) ->
+    [[{module(), atom(), [term()]}]].
 record(Module, Function, Arity, TimeMs) ->
     TracerPid = spawn_link(fun tracer/0),
     TraceSpec = [{'_', [], []}],
@@ -297,6 +299,8 @@ arguments() ->
 
 %%-------------------------------------------------------------------
 %% Color output
+
+-spec format(error | warining, string(), [term()]) -> ok.
 format(Level, Format, Terms) ->
     io:format(color(Level, Format), Terms).
 
@@ -588,10 +592,12 @@ tracer() ->
     process_flag(message_queue_data, off_heap),
     tracer_loop([]).
 
+-spec tracer_loop([{module(), atom(), [term()]}]) -> ok.
 tracer_loop(Trace) ->
     receive
         {trace, _Pid, call, MFA} ->
             tracer_loop([MFA | Trace]);
         {stop, Control} ->
-            Control ! {data, Trace}
+            Control ! {data, Trace},
+            ok
     end.

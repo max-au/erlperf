@@ -93,7 +93,7 @@ info(JobId) ->
 
 %% @doc
 %% Internally used by the monitoring process to access job atomic counter.
--spec get_counters(pid()) -> reference().
+-spec get_counters(pid()) -> atomics:atomics_ref().
 get_counters(JobId) ->
     gen_server:call(JobId, get_counters).
 
@@ -132,13 +132,15 @@ profile(JobId, Profiler, Format) ->
     %
     workers = [] :: [pid()],
     % counter reference (index is always 1)
-    cref :: reference()
+    cref :: atomics:atomics_ref()
 }).
 
+-type state() :: #state{}.
 
 %%%===================================================================
 %%% gen_server callbacks
 
+-spec init(code()) -> {ok, state()}.
 init(Code) ->
     CRef = atomics:new(1, []),
     State0 = maybe_compile(Code),
@@ -152,6 +154,7 @@ init(Code) ->
         workers = set_concurrency_impl(Concurrency, State1)
     }}.
 
+-spec handle_call(term(), {pid(), reference()}, state()) -> {reply, term(), state()}.
 handle_call(info, _From, #state{code = Code} = State) ->
     {reply, {ok, Code, length(State#state.workers)}, State};
 
@@ -167,9 +170,11 @@ handle_call(get_code, _From, #state{runner = Runner, init_runner = IR, init_resu
 handle_call(_Request, _From, _State) ->
     error(badarg).
 
+-spec handle_cast(term(), state()) -> no_return().
 handle_cast(_Request, _State) ->
     error(badarg).
 
+-spec handle_info(term(), state()) -> {noreply, state()}.
 handle_info({'EXIT', Worker, Reason}, State) when Reason =:= shutdown; Reason =:= normal ->
     {noreply, State#state{workers = lists:delete(Worker, State#state.workers)}};
 handle_info({'EXIT', Worker, Reason}, _State) ->
@@ -179,6 +184,7 @@ handle_info({'EXIT', Worker, Reason}, _State) ->
 handle_info(_Info, _State) ->
     error(badarg).
 
+-spec terminate(term(), state()) -> ok.
 terminate(_Reason, #state{done = Done, init_result = IR, module = Mod} = State) ->
     % terminate all workers first
     set_concurrency_impl(0, State),
@@ -338,7 +344,6 @@ need_compile(Code) ->
 
 %% Some compilation needed
 do_compile(Code) ->
-    %
     Mod = module_name(),
     ModForm = {attribute, 1, module, Mod},
     % make MFA (and forms if it's source code)
