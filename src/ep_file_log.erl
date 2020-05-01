@@ -121,15 +121,15 @@ terminate(_Reason, _State) ->
 %%% Internal functions
 
 maybe_write_header(Jobs, #state{log_counter = LC, log_limit = LL, jobs = Prev} = State) when LC >= LL; Jobs =/= Prev ->
-    write_header(State#state{jobs = Jobs});
+    State#state{format = write_header(State#state.log_file, Jobs), log_counter = 0, jobs = Jobs};
 maybe_write_header(_, State) ->
     State#state{log_counter = State#state.log_counter + 1}.
 
-write_header(#state{log_file = File, jobs = Jobs} = State) ->
+write_header(File, Jobs) ->
     JobCount = length(Jobs),
     Format = "~s ~6.2f ~6.2f ~6.2f ~8b ~8b ~7b ~9s ~9s ~9s ~9s" ++
         lists:flatten(lists:duplicate(JobCount, "~11s")) ++ "~n",
     JobIds = list_to_binary(lists:flatten([io_lib:format("  ~6p", [J]) || J <- Jobs])),
     Header =  <<"\nYYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS", JobIds/binary, "\n">>,
     ok = file:write(File, Header),
-    State#state{format = Format, log_counter = 0}.
+    Format.

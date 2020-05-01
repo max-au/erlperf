@@ -210,7 +210,7 @@ format(Options0) ->
     tracer = undefined :: undefined | pid(),
     call_time = undefined :: undefined | [{module(), [{{Fun :: atom(), non_neg_integer()},
         Count :: non_neg_integer(), Time :: non_neg_integer()}]}], % {ets, [{internal_select_delete,2,1,1}, {internal_delete_all,2,3,4}]}
-    samples = undefined :: undefined | [term()],
+    samples = undefined :: undefined | {[{module(), atom(), non_neg_integer(), term()}], term()},
     traced_procs :: term()
 }).
 

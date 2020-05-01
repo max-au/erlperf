@@ -18,7 +18,7 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
--spec init([]) -> {ok, supervisor:sup_flags(), [supervisor:child_spec()]}.
+-spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
     {ok, {
         #{strategy => simple_one_for_one,

@@ -58,7 +58,7 @@ subscribe(_Config) ->
     Code = {timer, sleep, [10]},
     {ok, Job} = ep_job:start(Code),
     ok = ep_job:set_concurrency(Job, 4),
-    {ok, Code, 4} = ep_job:info(Job),
+    ?assertEqual({ok, Code, 4}, ep_job:info(Job)),
     % wait for 3 seconds, receive updates
     First = receive_updates(Job, 0, 2),
     ok = ep_job:set_concurrency(Job, 2),

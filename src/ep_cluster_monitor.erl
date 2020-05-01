@@ -30,7 +30,7 @@
 
 %% Handler: just like gen_event handler.
 %% If you do need gen_event handler, make a fun of it.
--type handler() :: {module(), atom(), term()} | file:filename_all() | io:device().
+-type handler() :: {module(), atom(), term()} | file:filename_all() | {fd, io:device()} | io:device().
 
 %%--------------------------------------------------------------------
 %% @doc

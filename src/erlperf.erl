@@ -499,7 +499,7 @@ perform_benchmark(CRefs, Options) ->
     % do at least 'cycles' cycles
     Before = [[atomics:get(CRef, 1)] || CRef <- CRefs],
     Samples = measure_impl(Before, CRefs, Interval, maps:get(samples, Options, 3), maps:get(cv, Options, undefined)),
-    report_benchmark(Samples, maps:find(report, Options)).
+    report_benchmark(Samples, maps:get(report, Options, false)).
 
 measure_impl(Before, _CRefs, _Interval, 0, undefined) ->
     normalise(Before);
@@ -547,7 +547,7 @@ normalise_series([S, F | Tail]) ->
 
 report_benchmark(Samples, extended) ->
     Samples;
-report_benchmark(SamplesList, _) ->
+report_benchmark(SamplesList, false) ->
     [lists:sum(Samples) div length(Samples) || Samples <- SamplesList].
 
 %% Determine maximum throughput by measuring multiple times with different concurrency.

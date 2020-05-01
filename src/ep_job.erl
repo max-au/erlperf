@@ -142,12 +142,11 @@ profile(JobId, Profiler, Format) ->
 
 -spec init(code()) -> {ok, state()}.
 init(Code) ->
-    CRef = atomics:new(1, []),
     State0 = maybe_compile(Code),
     IR = call(State0#state.init, undefined),
     erlang:process_flag(trap_exit, true),
-    gen_event:notify(?JOB_EVENT, {started, self(), Code, CRef}),
-    State1 = State0#state{code = Code, cref = CRef, init_result = IR},
+    gen_event:notify(?JOB_EVENT, {started, self(), Code, State0#state.cref}),
+    State1 = State0#state{init_result = IR},
     maybe_save(Code),
     Concurrency = if is_map(Code) -> maps:get(initial_concurrency, Code, 0); true -> 0 end,
     {ok, State1#state{
@@ -313,7 +312,8 @@ wait_for_killed([Pid | Tail]) ->
 -define (IS_MFA(XXMFA), is_tuple(XXMFA); is_tuple(hd(XXMFA)); is_function(XXMFA); XXMFA =:= []; XXMFA =:= {[]}).
 
 maybe_compile(Code) when not is_map(Code) ->
-    maybe_compile(#{runner => Code});
+    State0 = maybe_compile(#{runner => Code}),
+    State0#state{code = Code};
 
 maybe_compile(#{runner := _Runner} = Code) ->
     case need_compile(Code) of
@@ -322,7 +322,9 @@ maybe_compile(#{runner := _Runner} = Code) ->
                 runner = ensure_loaded(maps:get(runner, Code)),
                 init = ensure_loaded(maps:get(init, Code, undefined)),
                 init_runner = ensure_loaded(maps:get(init_runner, Code, undefined)),
-                done = ensure_loaded(maps:get(done, Code, undefined))
+                done = ensure_loaded(maps:get(done, Code, undefined)),
+                cref = atomics:new(1, []),
+                code = Code
             };
         true ->
             do_compile(Code)
@@ -380,15 +382,15 @@ do_compile(Code) ->
         runner = ensure_callable(Runner),
         init = ensure_callable(Init),
         done = ensure_callable(Done),
-        init_runner = ensure_callable(InitRunner)
+        init_runner = ensure_callable(InitRunner),
+        cref = atomics:new(1, []),
+        code = Code
     }.
 
 module_name() ->
     list_to_atom(lists:flatten(io_lib:format("job_~p_~p", [node(), self()]))).
 
 %% Returns {fun/MFA, undefined | Abstract Form}
--spec try_export(module(), atom(), map()) ->
-    undefined | {{module(), atom(), [term()]} | function(), undefined | erl_parse:abstract_form()}.
 try_export(Mod, Name, Map) ->
     case maps:find(Name, Map) of
         error ->
@@ -417,7 +419,7 @@ ensure_loaded(Other) ->
 
 %% Converts a text form into Erlang Abstract Form,
 %%  and returns function name.
--spec export(atom(), string()) -> {atom(), non_neg_integer(), string()}.
+-spec export(done | init | init_runner | runner, string()) -> {atom(), byte(), erl_parse:abstract_form()}.
 export(DefaultName, Text) ->
     {ok, Scan, _} = erl_scan:string(Text),
     case erl_parse:parse_form(Scan) of
@@ -438,8 +440,6 @@ export(DefaultName, Text) ->
 
 ensure_callable(undefined) ->
     undefined;
-ensure_callable({[], _}) ->
-    error("empty callable");
 ensure_callable({MFA, _}) ->
     ensure_loaded(MFA).
 
