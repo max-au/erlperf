@@ -256,7 +256,7 @@ arguments() ->
     "erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 1 'pg2:create(foo).' --done 1 'pg2:delete(foo).'\n",
         arguments => [
             #{name => concurrency, short => $c, long => "-concurrency",
-                help => "number of concurrencly execured runner processes",
+                help => "number of concurrently executed runner processes",
                 default => 1, type => {int, [{min, 1}, {max, 1024 * 1024 * 1024}]}},
             #{name => sample_duration, short => $d, long => "-duration",
                 help => "single sample duration", default => 1000,
