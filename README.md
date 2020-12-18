@@ -127,12 +127,12 @@ compile it and load into VM.
 
 ## One-time throughput run
 Supported use-cases:
- * single run for MFA: ```erlperf:benchmark(rand, uniform, [1000]).```
- * call chain: ```erlperf:benchmark([{rand, uniform, [10]}, {erlang, node, []}]}.```,
+ * single run for MFA: ```erlperf:run({rand, uniform, [1000]}).```
+ * call chain: ```erlperf:run([{rand, uniform, [10]}, {erlang, node, []}]).```,
  see [recording call chain](#recording-call-chain)
- * function object: ```erlperf:benchmark(fun() -> rand:uniform(100) end).```
- * function object with an argument: ```erlperf:benchmark(fun(Init) -> io_lib:format("~tp", [Init]) end).```
- * source code: ```erlperf:benchmark("runner() -> rand:uniform(20).").```
+ * anonymous function: ```erlperf:run(fun() -> rand:uniform(100) end).```
+ * anonymous object with an argument: ```erlperf:run(fun(Init) -> io_lib:format("~tp", [Init]) end).```
+ * source code: ```erlperf:run("runner() -> rand:uniform(20).").```
  
 Source code cannot be mixed with MFA. Call chain may contain only complete
 MFA tuples and cannot be mixed with functions.
@@ -147,12 +147,12 @@ Startup and teardown
  
 Example with mixed MFA:
 ```
-   erlperf:benchmark(
+   erlperf:run(
        #{
-           runner => fun(Arg) -> rand:uniform(Arg),
+           runner => fun(Arg) -> rand:uniform(Arg) end,
            init => 
-               {myserver, start_link(), []},
-           init_runner => 
+               {pg, start_link, []},
+           init_runner =>
                fun ({ok, Pid}) -> 
                    {total_heap_size, THS} = erlang:process_info(Pid, total_heap_size),
                    THS
@@ -164,12 +164,11 @@ Example with mixed MFA:
  
 Same example with source code:
 ```
-erlperf:benchmark(
-    {
+erlperf:run(
+    #{
         runner => "runner(Max) -> rand:uniform(Max).",
-        init => "init() -> myserver:start_link().",
-        init_runner => "init_runner() -> "
-            init_runner({ok, Pid}) ->
+        init => "init() -> pg:start_link().",
+        init_runner => "init_runner({ok, Pid}) ->
             {total_heap_size, THS} = erlang:process_info(Pid, total_heap_size),
             THS.",
         done => "done({ok, Pid}) -> gen_server:stop(Pid)."
@@ -184,7 +183,7 @@ By default, erlperf performs no **warmup** cycle, then takes 3 consecutive
 **samples**, using **concurrency** of 1 (single runner). It is possible 
 to tune this behaviour by specifying run_options:
 ```
-    erlperf:benchmark(Code, #{concurrency => 2, samples => 10, warmup => 1}).
+    erlperf:run({erlang, node, []}, #{concurrency => 2, samples => 10, warmup => 1}).
 ```
 For list of options available, refer to benchmark reference.
 
@@ -195,7 +194,7 @@ detect bottlenecks, e.g. lock contention, single dispatcher process
 bottleneck etc.. Example (with maximum concurrency limited to 50):
 
 ```
-    erlperf:benchmark(Code, #{warmup => 1}, #{max => 50}).
+    erlperf:run(Code, #{warmup => 1}, #{max => 50}).
 ```
 
 # Continuous benchmarking
