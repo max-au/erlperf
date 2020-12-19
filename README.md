@@ -5,44 +5,58 @@ Simple way to say "this code is faster than that one".
 
 Build:
 
+```bash
     $ rebar3 escriptize
     $ cp _build/default/bin/erlperf ./
+```
 
 # TL; DR
 
 Find out how many times per second a function can be run  (beware of shell escaping your code!):
 
+```bash
     $ ./erlperf 'timer:sleep(1).'
     Code                    ||        QPS     Rel
     timer:sleep(1).          1        500    100%
+```
 
 Run erlperf with two concurrently running samples of code
 
+
+```bash
     $ ./erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1
     Code                         Concurrency   Throughput   Relative
     rand:uniform().                        1      4303 Ki       100%
     crypto:strong_rand_bytes(2).           1      1485 Ki        35%
+```
 
 Or just measure how concurrent your code is (example below shows saturation with only 1 process):
 
+```bash
     $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 'pg2:create(foo).' --squeeze
     Code                                               ||        QPS
     pg2:join(foo, self()), pg2:leave(foo, self()).      1      29836
+```
     
 If you need some initialisation done before running the test:
 
+```bash
     $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 'pg2:create(foo).' --done 'pg2:delete(foo).'
     Code                                                   ||        QPS     Rel
     pg2:join(foo, self()), pg2:leave(foo, self()).          1      30265    100%
+```
     
 Determine how well pg2 is able to have concurrent group modifications when there are no nodes in the cluster:
 
+```bash
     $ ./erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 'G = {foo, rand:uniform(10000)}, pg2:create(G), G.' -q
     ode                                                               ||        QPS
     runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg,     13      76501
+```
     
 Watch the progress of your test running (use -v option):
 
+```bash
     $ ./erlperf dane$ _build/default/bin/erlperf 'rand:uniform().' -q -v
     
     YYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS  <0.92.0>
@@ -54,6 +68,7 @@ Watch the progress of your test running (use -v option):
     2019-06-21T13:25:56-07:00 100.00   0.00   0.00       63        3      20  32809 Kb   4964 Kb    201 Kb    469 Kb   13074 Ki
     Code                ||        QPS
     rand:uniform().      8   14918 Ki
+```
     
 
 Command-line benchmarking does not save results anywhere. It is designed to provide a quick answer to the question
@@ -65,7 +80,11 @@ development and testing stages, allowing to quickly notice performance regressio
  
 Usage example (assuming you're running an OTP release, or rebar3 shell for your application):
 
-    $ rebar3 shell --sname mynode
+```bash
+
+        $ rebar3 shell --sname mynode
+```
+```erlang
     > application:start(erlperf).
     ok.
     
@@ -103,6 +122,7 @@ Usage example (assuming you're running an OTP release, or rebar3 shell for your 
     % when finished, just shut everything down with one liner:
     > application:stop(erlperf).
     ok.
+```
 
 
 # Reference Guide
@@ -118,7 +138,9 @@ Usage example (assuming you're running an OTP release, or rebar3 shell for your 
 
 ## Build
 
+```bash
     $ rebar3 do compile, escriptize
+```
 
 ## Usage
 Benchmarking is done either using already compiled code, or a free-form
@@ -146,7 +168,7 @@ Startup and teardown
  determine if it accepts exact or +1 argument from init_runner
  
 Example with mixed MFA:
-```
+```erlang
    erlperf:run(
        #{
            runner => fun(Arg) -> rand:uniform(Arg) end,
@@ -163,7 +185,7 @@ Example with mixed MFA:
 ``` 
  
 Same example with source code:
-```
+```erlang
 erlperf:run(
     #{
         runner => "runner(Max) -> rand:uniform(Max).",
@@ -182,7 +204,7 @@ for a specified period of time (**sample_duration**).
 By default, erlperf performs no **warmup** cycle, then takes 3 consecutive 
 **samples**, using **concurrency** of 1 (single runner). It is possible 
 to tune this behaviour by specifying run_options:
-```
+```erlang
     erlperf:run({erlang, node, []}, #{concurrency => 2, samples => 10, warmup => 1}).
 ```
 For list of options available, refer to benchmark reference.
@@ -193,7 +215,7 @@ processes, and find out when it saturates the node. It can be used to
 detect bottlenecks, e.g. lock contention, single dispatcher process
 bottleneck etc.. Example (with maximum concurrency limited to 50):
 
-```
+```erlang
     erlperf:run(Code, #{warmup => 1}, #{max => 50}).
 ```
 
@@ -215,7 +237,7 @@ counter injections), to be determined later.
 Benchmarking can only work with exported functions (unlike ep_prof module,
 that is also able to record arguments of local function calls).
 
-```
+```erlang
     > f(Trace), Trace = erlperf:record(pg2, '_', '_', 1000).
     ...
     
@@ -232,7 +254,7 @@ that is also able to record arguments of local function calls).
 
 It's possible to create a Common Test testcase using recorded samples.
 Just put the recorded file into xxx_SUITE_data:
-```
+```erlang
     QPS = erlperf:run(erlperf:load(?config(data_dir, "pg2"))),
     ?assert(QPS > 500). % catches regression for QPS falling below 500
 ```
@@ -241,7 +263,7 @@ Just put the recorded file into xxx_SUITE_data:
 
 It's possible to run a job on a separate node in the cluster.
 
-```
+```erlang
     % watch the entire cluster (printed to console)
     > {ok, ClusterLogger} = ep_cluster_monitor:start().
     {ok, <0.211.0>}
