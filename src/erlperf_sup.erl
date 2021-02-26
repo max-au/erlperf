@@ -26,6 +26,16 @@ init([]) ->
     SupFlags = #{strategy => rest_for_one,
                  intensity => 2,
                  period => 60},
+    %% OTP 24 support: pg2 module was removed, replaced with pg
+    %% However `pg` is not started by default, so run it as a part
+    %%  of erlperf supervision tree
+    PGSpec =
+        try
+            pg:module_info(),
+            [#{id => pg, start => {pg, start_link, []}}]
+        catch error:undef -> []
+        end,
+
     ChildSpecs = [
         % event bus for job-related changes, started-stopped jobs
         #{id => ?JOB_EVENT,
@@ -44,4 +54,4 @@ init([]) ->
             type => supervisor,
             modules => [ep_monitor_sup]}
         ],
-    {ok, {SupFlags, ChildSpecs}}.
+    {ok, {SupFlags, PGSpec ++ ChildSpecs}}.

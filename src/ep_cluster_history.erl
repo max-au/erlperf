@@ -69,9 +69,18 @@ get(From, To) ->
 %%%===================================================================
 %%% gen_server callbacks
 
+%% Suppress dialyzer warning for OTP compatibility: erlperf runs on OTP20
+%%  that does not support pg, and has pg2 instead.
+-dialyzer({no_missing_calls, init/1}).
+-compile({nowarn_removed, [{pg2, create, 1}, {pg2, join, 2}]}).
 init([]) ->
-    ok = pg2:create(?HISTORY_PROCESS_GROUP),
-    ok = pg2:join(?HISTORY_PROCESS_GROUP, self()),
+    try
+        ok = pg:join(?HISTORY_PROCESS_GROUP, self())
+    catch
+        error:undef ->
+            ok = pg2:create(?HISTORY_PROCESS_GROUP),
+            ok = pg2:join(?HISTORY_PROCESS_GROUP, self())
+    end,
     ?TABLE = ets:new(?TABLE, [protected, ordered_set, named_table]),
     % initial fetch (subject to race condition)
     Now = erlang:system_time(millisecond),

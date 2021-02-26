@@ -33,31 +33,31 @@ Run erlperf with two concurrently running samples of code
 Or just measure how concurrent your code is (example below shows saturation with only 1 process):
 
 ```bash
-    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 'pg2:create(foo).' --squeeze
-    Code                                               ||        QPS
-    pg2:join(foo, self()), pg2:leave(foo, self()).      1      29836
+    $ ./erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).' --squeeze
+    Code                           ||        QPS
+    code:is_loaded(local_udp).      1     614 Ki
 ```
     
-If you need some initialisation done before running the test:
+If you need some initialisation done before running the test, and clean up after:
 
 ```bash
-    $ ./erlperf 'pg2:join(foo, self()), pg2:leave(foo, self()).' --init 'pg2:create(foo).' --done 'pg2:delete(foo).'
-    Code                                                   ||        QPS     Rel
-    pg2:join(foo, self()), pg2:leave(foo, self()).          1      30265    100%
+    $ ./erlperf 'pg:join(scope, self()), pg:leave(scope, self()).' --init 'pg:start_link(scope).' --done 'gen_server:stop(scope).'
+    Code                                                     ||        QPS     Rel
+    pg:join(scope, self()), pg:leave(scope, self()).          1     287 Ki    100%
 ```
     
-Determine how well pg2 is able to have concurrent group modifications when there are no nodes in the cluster:
+Determine how well pg2 (removed in OTP 24) is able to have concurrent group modifications when there are no nodes in the cluster:
 
 ```bash
     $ ./erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 'G = {foo, rand:uniform(10000)}, pg2:create(G), G.' -q
-    ode                                                               ||        QPS
+    Code                                                               ||        QPS
     runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg,     13      76501
 ```
     
 Watch the progress of your test running (use -v option):
 
 ```bash
-    $ ./erlperf dane$ _build/default/bin/erlperf 'rand:uniform().' -q -v
+    $ ./erlperf 'rand:uniform().' -q -v
     
     YYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS  <0.92.0>
     2019-06-21T13:25:21-07:00  11.98   0.00   0.47       52        3      20  32451 Kb   4673 Kb    179 Kb    458 Kb    3761 Ki
@@ -288,3 +288,10 @@ It's possible to run a job on a separate node in the cluster.
 ```
 
 Cluster-wide monitoring will reflect changes accordingly.
+
+## Changelog
+Version 1.0.1:
+- added support for OTP 24
+
+Version 1.0.0:
+- initial release

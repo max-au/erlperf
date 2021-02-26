@@ -81,7 +81,7 @@ groups() ->
             cmd_line_squeeze,
             cmd_line_usage,
             cmd_line_init,
-            cmd_line_pg2,
+            cmd_line_pg,
             cmd_line_mfa,
             cmd_line_recorded,
             cmd_line_profile
@@ -319,29 +319,29 @@ cmd_line_usage(_Config) ->
     ?assertEqual("error: erlperf: unrecognised argument: --un code", lists:sublist(Out2, 48)),
     ok.
 
-% erlperf 'true = ets:insert(foo, {1, self()}), ets:delete(foo, 1).' --init 'ets:new(foo, [named_table, public]).' --done 'ets:delete(foo).'
+% erlperf '{file,_}=code:is_loaded(slave).' --init 'code:ensure_loaded(slave).' --done 'code:purge(slave), code:delete(slave).'
 cmd_line_init(_Config) ->
-    Code = "pg2:join(foo,self()),pg2:leave(foo,self()).",
+    Code = "{file,_}=code:is_loaded(slave).",
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init", "pg2:create(foo).", "--done", "pg2:delete(foo)."])
+        [Code, "--init", "code:ensure_loaded(slave).", "--done", "code:purge(slave), code:delete(slave)."])
                                   end),
     % verify 'done' was done
-    ?assertEqual({error,{no_such_group,foo}}, pg2:get_members(foo)),
+    ?assertEqual(false, code:is_loaded(slave)),
     % verify output
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
+    ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " ")),
     ok.
 
-% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init_runner 'pg2:create(self()), self().'
-cmd_line_pg2(_Config) ->
-    Code = "runner(Arg)->ok=pg2:join(Arg,self()),ok=pg2:leave(Arg,self()).",
+% erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
+cmd_line_pg(_Config) ->
+    Code = "runner(S)->ok=pg:join(S,self()),ok=pg:leave(S,self()).",
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init_runner", "pg2:create(self()), self()."])
+        [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
                                   end),
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
+    ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " ")),
     ok.
 
 % erlperf '{rand, uniform, [100]}'
@@ -379,9 +379,9 @@ cmd_line_recorded(Config) ->
 
 % profiler test
 cmd_line_profile(_Config) ->
-    Code = "runner(Arg)->ok=pg2:join(Arg,self()),ok=pg2:leave(Arg,self()).",
+    Code = "runner(Arg)->ok=pg:join(Arg,1,self()),ok=pg:leave(Arg,1,self()).",
     Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init_runner", "pg2:create(self()), self().", "--profile"])
+        [Code, "--init_runner", "element(2, pg:start_link(scope)).", "--profile"])
                                   end),
     [LN1 | _] = string:split(Out, "\n"),
     ?assertEqual("Reading trace data...", LN1),
