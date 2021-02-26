@@ -335,14 +335,18 @@ cmd_line_init(_Config) ->
 
 % erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
 cmd_line_pg(_Config) ->
-    Code = "runner(S)->ok=pg:join(S,self()),ok=pg:leave(S,self()).",
-    Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
-                                  end),
-    [LN1, LN2] = string:split(Out, "\n"),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " ")),
-    ok.
+    case code:which(pg) of
+        non_existing ->
+            {skip, {otp_version, "pg is not supported"}};
+        _ ->
+            Code = "runner(S)->ok=pg:join(S,self()),ok=pg:leave(S,self()).",
+            Out = test_helpers:capture_io(fun () -> erlperf:main(
+                [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
+                                          end),
+            [LN1, LN2] = string:split(Out, "\n"),
+            ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+            ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " "))
+    end.
 
 % erlperf '{rand, uniform, [100]}'
 cmd_line_mfa(_Config) ->
@@ -379,13 +383,17 @@ cmd_line_recorded(Config) ->
 
 % profiler test
 cmd_line_profile(_Config) ->
-    Code = "runner(Arg)->ok=pg:join(Arg,1,self()),ok=pg:leave(Arg,1,self()).",
-    Out = test_helpers:capture_io(fun () -> erlperf:main(
-        [Code, "--init_runner", "element(2, pg:start_link(scope)).", "--profile"])
-                                  end),
-    [LN1 | _] = string:split(Out, "\n"),
-    ?assertEqual("Reading trace data...", LN1),
-    ok.
+    case code:which(pg) of
+        non_existing ->
+            {skip, {otp_version, "pg is not supported"}};
+        _ ->
+            Code = "runner(Arg)->ok=pg:join(Arg,1,self()),ok=pg:leave(Arg,1,self()).",
+            Out = test_helpers:capture_io(fun () -> erlperf:main(
+                [Code, "--init_runner", "element(2, pg:start_link(scope)).", "--profile"])
+                                          end),
+            [LN1 | _] = string:split(Out, "\n"),
+            ?assertEqual("Reading trace data...", LN1)
+    end.
 
 formatters(_Config) ->
     ?assertEqual("88", erlperf:format_size(88)),
