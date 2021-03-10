@@ -9,7 +9,7 @@
 -author("maximfca@gmail.com").
 
 %% Common Test headers
--include_lib("common_test/include/ct.hrl").
+
 -include_lib("stdlib/include/assert.hrl").
 
 -include_lib("erlperf/include/monitor.hrl").
@@ -84,7 +84,7 @@ monitor_cluster(Config) ->
     %
     {IoProc, GL} = test_helpers:redirect_io(),
     {ok, ClusterMonPid} = ep_cluster_monitor:start(),
-    LogFile = filename:join(?config(priv_dir, Config), "cluster_log.txt"),
+    LogFile = filename:join(proplists:get_value(priv_dir, Config), "cluster_log.txt"),
     {ok, ClusterFilePid} = ep_cluster_monitor:start(LogFile, [time, jobs]),
     % start a benchmark on the different node, and monitor progress
     % link the process to kill it if timetrap fires

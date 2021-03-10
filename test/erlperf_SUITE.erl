@@ -5,20 +5,47 @@
 %%%     Tests benchmark module, machine-readable output for benchmarks.
 %%% @end
 %%% -------------------------------------------------------------------
-
 -module(erlperf_SUITE).
+-author("maximfca@gmail.com").
 
-%% Common Test headers
--include_lib("common_test/include/ct.hrl").
-
-%% Include stdlib header to enable ?assert() for readable output
 -include_lib("stdlib/include/assert.hrl").
 
--compile(nowarn_export_all).
--compile(export_all).
+-export([
+    suite/0, all/0, groups/0,
+    init_per_testcase/2,
+    end_per_testcase/2,
+    init_per_group/2,
+    end_per_group/2,
+    init_per_suite/1,
+    end_per_suite/1]).
+
+-export([
+    start_link/0,
+    init/1,
+    handle_call/3,
+    handle_cast/2
+]).
+
+-export([mfa/1, mfa_with_cv/1,
+    mfa_with_tiny_cv/0, mfa_with_tiny_cv/1,
+    mfa_list/1, mfa_fun/1, mfa_fun1/1, code/1,
+    code_fun/1, code_fun1/1, mfa_init/1, mfa_fun_init/1,
+    code_gen_server/1, mfa_concurrency/1, mfa_no_concurrency/1,
+    code_extra_node/1, mixed/0, mixed/1,
+    crasher/0, crasher/1, undefer/0, undefer/1, compare/1,
+    errors/0, errors/1, formatters/1]).
+
+-export([
+    cmd_line_simple/1, cmd_line_verbose/1, cmd_line_compare/1,
+    cmd_line_squeeze/1, cmd_line_usage/1, cmd_line_init/1,
+    cmd_line_double/1, cmd_line_triple/1, cmd_line_pg/1, cmd_line_mfa/1,
+    cmd_line_recorded/1, cmd_line_profile/1,
+    cmd_line_squeeze/0
+]).
+
+-export([mfa_squeeze/0, mfa_squeeze/1, replay/1, do_anything/1]).
 
 -behaviour(gen_server).
-
 
 %%--------------------------------------------------------------------
 %% COMMON TEST CALLBACK FUNCTIONS
@@ -81,6 +108,8 @@ groups() ->
             cmd_line_squeeze,
             cmd_line_usage,
             cmd_line_init,
+            cmd_line_double,
+            cmd_line_triple,
             cmd_line_pg,
             cmd_line_mfa,
             cmd_line_recorded,
@@ -333,6 +362,24 @@ cmd_line_init(_Config) ->
     ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " ")),
     ok.
 
+% erlperf 'runner(X) -> timer:sleep(X).' --init '1.' 'runner(Y) -> timer:sleep(Y).' --init '2.' -s 2 --duration 100
+cmd_line_double(_Config) ->
+    Code = "runner(X)->timer:sleep(X).",
+    Out = test_helpers:capture_io(fun () -> erlperf:main([Code, "--init", "1.", Code, "--init", "2.", "-s", "2",
+        "--duration", "100"]) end),
+    [LN1, LN2, _LN3 | _] = string:split(Out, "\n", all),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch([Code, "1", _, "100%"], string:lexemes(LN2, " ")),
+    ok.
+
+cmd_line_triple(_Config) ->
+    Out = test_helpers:capture_io(fun () -> erlperf:main(["timer:sleep(1).", "-s", "2", "--duration", "100",
+        "timer:sleep(2).", "timer:sleep(3)."]) end),
+    [LN1, _LN2, _LN3, LN4 | _] = string:split(Out, "\n", all),
+    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertMatch([_, "1", _, "50%"], string:lexemes(LN4, " ")),
+    ok.
+
 % erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
 cmd_line_pg(_Config) ->
     case code:which(pg) of
@@ -360,8 +407,9 @@ cmd_line_mfa(_Config) ->
 % erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 'ets:file2tab("pg2.tab").'
 cmd_line_recorded(Config) ->
     % write down ETS table to file
-    EtsFile = filename:join(?config(priv_dir, Config), "ets.tab"),
-    RecFile = filename:join(?config(priv_dir, Config), "recorded.list"),
+    Priv = proplists:get_value(priv_dir, Config),
+    EtsFile = filename:join(Priv, "ets.tab"),
+    RecFile = filename:join(Priv, "recorded.list"),
     test_ets_tab = ets:new(test_ets_tab, [named_table, public, ordered_set]),
     [true = ets:insert(test_ets_tab, {N, rand:uniform(100)}) || N <- lists:seq(1, 100)],
     ok = ets:tab2file(test_ets_tab, EtsFile),

@@ -221,7 +221,7 @@ merge_callable(_Type, [], Acc, Merged) ->
     lists:reverse(Merged) ++ Acc;
 merge_callable(_Type, _, [], Merged) ->
     lists:reverse(Merged);
-merge_callable(Type, [H | T], [HA | Acc], Merged) ->
+merge_callable(Type, [[H] | T], [HA | Acc], Merged) ->
     merge_callable(Type, T, Acc, [HA#{Type => H} | Merged]).
 
 parse_code(Code) ->
@@ -236,7 +236,9 @@ parse_code(Code) ->
                 {ok, Bin} ->
                     #{runner => parse_call_record(Bin)};
                 Other ->
-                    error({"Unable to read file with call recording", Code, Other})
+                    error({"Unable to read file with call recording\n" ++
+                        "Did you forget to end your function with period? (dot)",
+                        Code, Other})
             end
     end.
 
@@ -288,13 +290,13 @@ arguments() ->
                 help => "cv at least <threshold> samples should be less than <cv> to increase concurrency", default => 3,
                 type => {int, [{min, 1}]}},
             #{name => init, long => "-init",
-                help => "init code", nargs => 1},
+                help => "init code", nargs => 1, action => append},
             #{name => done, long => "-done",
-                help => "done code", nargs => 1},
+                help => "done code", nargs => 1, action => append},
             #{name => init_runner, long => "-init_runner",
-                help => "init_runner code", nargs => 1},
+                help => "init_runner code", nargs => 1, action => append},
             #{name => code,
-                help => "code to test", nargs => nonempty_list}
+                help => "code to test", nargs => nonempty_list, action => extend}
         ]}.
 
 %%-------------------------------------------------------------------

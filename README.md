@@ -45,6 +45,14 @@ If you need some initialisation done before running the test, and clean up after
     Code                                                     ||        QPS     Rel
     pg:join(scope, self()), pg:leave(scope, self()).          1     287 Ki    100%
 ```
+
+Run two versions of code against each other, with some init prior:
+
+```bash
+    $ ./erlperf 'runner(X) -> timer:sleep(X).' --init '1.' 'runner(Y) -> timer:sleep(Y).' --init '2.'
+    Code                                                     ||        QPS     Rel
+    pg:join(scope, self()), pg:leave(scope, self()).          1     287 Ki    100%
+```
     
 Determine how well pg2 (removed in OTP 24) is able to have concurrent group modifications when there are no nodes in the cluster:
 

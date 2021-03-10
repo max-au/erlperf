@@ -209,8 +209,8 @@ maybe_save(_) ->
     ok.
 
 %% undefined: return undefined
-call(undefined, _) ->
-    undefined;
+call(undefined, Ret) ->
+    Ret;
 
 %% Simple case: MFArgs, potentially +1 argument
 call({M, F, A}, Arg) when is_atom(M), is_atom(F), is_list(A) ->

@@ -8,9 +8,6 @@
 
 -module(ep_file_log_SUITE).
 
-%% Common Test headers
--include_lib("common_test/include/ct.hrl").
-
 %% Include stdlib header to enable ?assert() for readable output
 -include_lib("stdlib/include/assert.hrl").
 
@@ -77,7 +74,7 @@ manual_start() ->
     [{doc, "Tests manual startup of file log"}].
 
 manual_start(Config) ->
-    Filename = filename:join(?config(priv_dir, Config), "file_log_manual.txt"),
+    Filename = filename:join(proplists:get_value(priv_dir, Config), "file_log_manual.txt"),
     {ok, Pid} = ep_file_log:start(Filename),
     erlperf:run({timer, sleep, [1]}),
     ep_file_log:stop(Pid),

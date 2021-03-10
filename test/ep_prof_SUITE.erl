@@ -8,7 +8,6 @@
 
 -module(ep_prof_SUITE).
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, suite/0]).

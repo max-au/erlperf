@@ -7,8 +7,6 @@
 
 -module(ep_monitor_SUITE).
 
-%% Common Test headers
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 -include("monitor.hrl").
