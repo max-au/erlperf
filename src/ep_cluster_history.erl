@@ -1,8 +1,6 @@
-%%%-------------------------------------------------------------------
-%%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (C) 2019, Maxim Fedorov
+%%% @author Maxim Fedorov, <maximfca@gmail.com>
 %%% @doc
-%%%   Collects, accumulates & filters cluster-wide metrics.
+%%% Collects, accumulates &amp; filters cluster-wide metrics.
 %%% @end
 -module(ep_cluster_history).
 -author("maximfca@gmail.com").

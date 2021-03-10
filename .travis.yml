@@ -6,7 +6,7 @@ otp_release:
   - 23.0
   - 22.0
   - 21.2
-script: "wget https://s3.amazonaws.com/rebar3/rebar3 && escript rebar3 do ct"
+script: "wget https://s3.amazonaws.com/rebar3/rebar3 && escript rebar3 do ct,edoc,escriptize"
 branches:
   only:
     - master

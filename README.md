@@ -1,13 +1,13 @@
 erlperf
 =====
 
+Erlang Performance & Benchmarking Suite.
 Simple way to say "this code is faster than that one".
 
 Build:
 
 ```bash
-    $ rebar3 escriptize
-    $ cp _build/default/bin/erlperf ./
+    $ rebar3 as prod escriptize
 ```
 
 # TL; DR
@@ -20,7 +20,7 @@ Find out how many times per second a function can be run  (beware of shell escap
     timer:sleep(1).          1        500    100%
 ```
 
-Run erlperf with two concurrently running samples of code
+Run erlperf with two concurrent samples of code
 
 
 ```bash
@@ -143,12 +143,6 @@ Usage example (assuming you're running an OTP release, or rebar3 shell for your 
 * **job**: single instance of the running benchmark (multiple processes)
 * **concurrency**: how many processes are running concurrently, executing *runner* code
 * **throughput**: total number of calls per sampling interval (for all concurrent processes)
-
-## Build
-
-```bash
-    $ rebar3 do compile, escriptize
-```
 
 ## Usage
 Benchmarking is done either using already compiled code, or a free-form

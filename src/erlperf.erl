@@ -2,7 +2,6 @@
 
 %%%-------------------------------------------------------------------
 %%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (C) 2019, Maxim Fedorov
 %%% @doc
 %%%   Benchmark/squeeze implementation, does not start any permanent
 %%%     jobs.
@@ -104,7 +103,7 @@
 
 %% @doc Simple case.
 %%  Runs a single benchmark, and returns a steady QPS number.
-%%  Job specification may include suite & worker init parts, suite cleanup,
+%%  Job specification may include suite &amp; worker init parts, suite cleanup,
 %%  worker code, job name and identifier (id).
 -spec run(ep_job:code()) -> non_neg_integer().
 run(Code) ->
