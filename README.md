@@ -292,8 +292,13 @@ It's possible to run a job on a separate node in the cluster.
 Cluster-wide monitoring will reflect changes accordingly.
 
 ## Changelog
-Version 1.0.1:
+
+Version 1.1.2:
+- updated command line parser to new argparse
+
+Version 1.1.1:
 - added support for OTP 24
+- added edoc documentation
 
 Version 1.0.0:
 - initial release

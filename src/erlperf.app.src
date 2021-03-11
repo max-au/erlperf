@@ -1,6 +1,6 @@
 {application, erlperf,
  [{description, "Erlang Performance & Benchmarking Suite"},
-  {vsn, "1.1.1"},
+  {vsn, "1.1.2"},
   {registered, [
     erlperf_sup, ep_monitor_sup, ep_job_sup, ep_monitor,
     ep_history, ep_file_log, ep_cluster_history,
