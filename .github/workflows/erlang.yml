@@ -1,0 +1,33 @@
+name: Build, Test, Dialyze
+
+on:
+  pull_request:
+    branches:
+      - 'master'
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  linux:
+    name: Test on OTP ${{ matrix.otp_version }} and ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        otp_version: [21.2, 22, 23]
+        os: [ubuntu-latest]
+
+    container:
+      image: erlang:${{ matrix.otp_version }}
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Compile
+      run: rebar3 compile
+    - name: CT tests
+      run: rebar3 do edoc,ct
+    - shell: bash
+      name: Dialyzer
+      run: rebar3 dialyzer
+
