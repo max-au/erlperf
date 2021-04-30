@@ -293,6 +293,9 @@ Cluster-wide monitoring will reflect changes accordingly.
 
 ## Changelog
 
+Version 1.1.3:
+- addressed deprecation, updated to argparse 1.1.4
+
 Version 1.1.2:
 - updated command line parser to new argparse
 
