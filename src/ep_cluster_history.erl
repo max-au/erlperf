@@ -70,6 +70,7 @@ get(From, To) ->
 %% Suppress dialyzer warning for OTP compatibility: erlperf runs on OTP20
 %%  that does not support pg, and has pg2 instead.
 -dialyzer({no_missing_calls, init/1}).
+-compile({nowarn_deprecated, [{pg2, create, 1}, {pg2, join, 2}]}).
 -compile({nowarn_removed, [{pg2, create, 1}, {pg2, join, 2}]}).
 init([]) ->
     try

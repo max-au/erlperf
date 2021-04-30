@@ -377,7 +377,7 @@ cmd_line_triple(_Config) ->
         "timer:sleep(2).", "timer:sleep(3)."]) end),
     [LN1, _LN2, _LN3, LN4 | _] = string:split(Out, "\n", all),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([_, "1", _, "50%"], string:lexemes(LN4, " ")),
+    ?assertMatch([_, "1", [$2,_], [$5, _, $%]], string:lexemes(LN4, " ")),
     ok.
 
 % erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
