@@ -2,8 +2,7 @@ name: Build, Test, Dialyze
 
 on:
   pull_request:
-    branches:
-      - 'master'
+    types: [ opened, synchronize ]
   push:
     branches:
       - 'master'
@@ -12,22 +11,20 @@ jobs:
   linux:
     name: Test on OTP ${{ matrix.otp_version }} and ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-
     strategy:
       matrix:
-        otp_version: [22, 23]
+        otp_version: ['22', '23']
         os: [ubuntu-latest]
-
-    container:
-      image: erlang:${{ matrix.otp_version }}
-
     steps:
-    - uses: actions/checkout@v2
-    - name: Compile
-      run: rebar3 compile
-    - name: CT tests
-      run: rebar3 do edoc,ct
-    - shell: bash
-      name: Dialyzer
-      run: rebar3 dialyzer
-
+      - uses: actions/checkout@v2
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{matrix.otp_version}}
+          rebar3-version: '3.15.1'
+      - name: Compile
+        run: rebar3 compile
+      - name: Run tests
+        run: rebar3 do edoc,ct
+      - shell: bash
+        name: Dialyzer
+        run: rebar3 dialyzer
