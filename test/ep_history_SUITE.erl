@@ -71,7 +71,12 @@ pg_clash() ->
     [{doc, "Tests that pg does not clash if started by kernel/another app"}].
 
 pg_clash(Config) when is_list(Config) ->
-    ok = application:stop(erlperf),
-    {ok, Pg} = pg:start_link(),
-    ok = application:start(erlperf),
-    gen_server:stop(Pg).
+    case code:which(pg) of
+        non_existing ->
+            {skip, {otp_version, "pg is not supported"}};
+        _ ->
+            ok = application:stop(erlperf),
+            {ok, Pg} = pg:start_link(),
+            ok = application:start(erlperf),
+            gen_server:stop(Pg)
+    end.
