@@ -447,7 +447,13 @@ ensure_callable({MFA, _}) ->
 %%% Profiling support
 
 profile_impl({Runner, InitRunner, InitResult}, fprof, Format) ->
-    run_fprof(Runner, InitRunner, InitResult, Format).
+    {Pid, Ref} = spawn_monitor(fun () -> run_fprof(Runner, InitRunner, InitResult, Format) end),
+    receive
+        {'DOWN', Ref, process, Pid, {ok, IO}} ->
+            IO;
+        {'DOWN', Ref, process, Pid, Error} ->
+            error(Error)
+    end.
 
 ensure_fprof_started({ok, _Pid}) ->
     ok;
@@ -484,9 +490,10 @@ run_fprof(Runner, InitRunner, InitResult, Format) ->
     TypeWriter ! {read, self()},
     receive
         {result, Result} ->
-            process_fprof_result(Result, Format)
+            IO = process_fprof_result(Result, Format),
+            exit({ok, IO})
     after 5000 ->
-        error(timeout)
+        exit(timeout)
     end.
 
 process_fprof_result(Io, term) ->

@@ -30,7 +30,8 @@ ensure_started(App, Config) ->
     end.
 
 ensure_stopped(Config) ->
-    [ok = application:stop(App) || App <- proplists:get_value(apps, Config, [])].
+    [ok = application:stop(App) || App <- proplists:get_value(apps, Config, [])],
+    proplists:delete(apps, Config).
 
 ensure_distributed(Config) ->
     case proplists:get_value(distribution, Config) of

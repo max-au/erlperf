@@ -32,8 +32,11 @@ init([]) ->
     PGSpec =
         try
             pg:module_info(),
+            undefined = whereis(pg),
             [#{id => pg, start => {pg, start_link, []}}]
-        catch error:undef -> []
+        catch
+            error:undef -> [];
+            error:{badmatch, Pid} when is_pid(Pid) -> []
         end,
 
     ChildSpecs = [

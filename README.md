@@ -293,6 +293,10 @@ Cluster-wide monitoring will reflect changes accordingly.
 
 ## Changelog
 
+Version 1.1.4:
+- fixed an issue with pg already started
+- moved profiling to spawned process
+
 Version 1.1.3:
 - addressed deprecation, updated to argparse 1.1.4
 

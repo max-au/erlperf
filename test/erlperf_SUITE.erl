@@ -377,7 +377,11 @@ cmd_line_triple(_Config) ->
         "timer:sleep(2).", "timer:sleep(3)."]) end),
     [LN1, _LN2, _LN3, LN4 | _] = string:split(Out, "\n", all),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([_, "1", [$2,_], [$5, _, $%]], string:lexemes(LN4, " ")),
+    [_, "1", TS3QPSS, TS3PercentS] = string:lexemes(LN4, " "),
+    TS3QPS = list_to_integer(TS3QPSS),
+    TS3Percent = list_to_integer(lists:droplast(TS3PercentS)),
+    ?assert(TS3QPS > 20 andalso TS3QPS < 30, {"expected between 20 and 30, got", TS3QPS}),
+    ?assert(TS3Percent > 40 andalso TS3Percent < 60, {"expected between 40 and 60, got", TS3QPS}),
     ok.
 
 % erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
@@ -386,11 +390,13 @@ cmd_line_pg(_Config) ->
         non_existing ->
             {skip, {otp_version, "pg is not supported"}};
         _ ->
+            ?assertEqual(undefined, whereis(scope)), %% ensure scope is not left
             Code = "runner(S)->ok=pg:join(S,self()),ok=pg:leave(S,self()).",
             Out = test_helpers:capture_io(fun () -> erlperf:main(
                 [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
                                           end),
             [LN1, LN2] = string:split(Out, "\n"),
+            ?assertEqual(undefined, whereis(scope)), %% ensure runner exited
             ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
             ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " "))
     end.
@@ -435,10 +441,12 @@ cmd_line_profile(_Config) ->
         non_existing ->
             {skip, {otp_version, "pg is not supported"}};
         _ ->
+            ?assertEqual(undefined, whereis(scope)), %% ensure runner is not left from the last run
             Code = "runner(Arg)->ok=pg:join(Arg,1,self()),ok=pg:leave(Arg,1,self()).",
             Out = test_helpers:capture_io(fun () -> erlperf:main(
                 [Code, "--init_runner", "element(2, pg:start_link(scope)).", "--profile"])
                                           end),
+            ?assertEqual(undefined, whereis(scope)), %% ensure runner exited
             [LN1 | _] = string:split(Out, "\n"),
             ?assertEqual("Reading trace data...", LN1)
     end.

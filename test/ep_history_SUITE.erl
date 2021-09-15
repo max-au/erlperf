@@ -22,7 +22,8 @@
 %% Test cases
 -export([
     errors/0, errors/1,
-    get_last/0, get_last/1
+    get_last/0, get_last/1,
+    pg_clash/0, pg_clash/1
 ]).
 
 suite() ->
@@ -41,7 +42,7 @@ end_per_testcase(_TestCase, _Config) ->
     ok.
 
 all() ->
-    [errors, get_last].
+    [errors, get_last, pg_clash].
 
 %%--------------------------------------------------------------------
 %% TEST CASES
@@ -65,3 +66,12 @@ get_last(_Config) ->
     timer:sleep(1000),
     Last = ep_history:get_last(5),
     ?assertNotEqual([], Last).
+
+pg_clash() ->
+    [{doc, "Tests that pg does not clash if started by kernel/another app"}].
+
+pg_clash(Config) when is_list(Config) ->
+    ok = application:stop(erlperf),
+    {ok, Pg} = pg:start_link(),
+    ok = application:start(erlperf),
+    gen_server:stop(Pg).
