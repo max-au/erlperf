@@ -447,7 +447,7 @@ ensure_callable({MFA, _}) ->
 %%% Profiling support
 
 profile_impl({Runner, InitRunner, InitResult}, fprof, Format) ->
-    {Pid, Ref} = spawn_monitor(fun () -> run_fprof(Runner, InitRunner, InitResult, Format) end),
+    {Pid, Ref} = spawn_monitor(fun () -> exit(run_fprof(Runner, InitRunner, InitResult, Format)) end),
     receive
         {'DOWN', Ref, process, Pid, {ok, IO}} ->
             IO;
@@ -491,9 +491,9 @@ run_fprof(Runner, InitRunner, InitResult, Format) ->
     receive
         {result, Result} ->
             IO = process_fprof_result(Result, Format),
-            exit({ok, IO})
+            {ok, IO}
     after 5000 ->
-        exit(timeout)
+        timeout
     end.
 
 process_fprof_result(Io, term) ->
