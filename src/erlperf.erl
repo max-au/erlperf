@@ -149,7 +149,7 @@ record(Module, Function, Arity, TimeMs) ->
 %% Starts a continuously running job in a new BEAM instance.
 -spec start(ep_job:code(), isolation()) -> {ok, node(), pid()}.
 start(Code, _Isolation) ->
-    [Node] = prepare_nodes(1),
+    {_Peers, [Node]} = prepare_nodes(1),
     {ok, Pid} = rpc:call(Node, ep_job, start, [Code], ?REMOTE_NODE_TIMEOUT),
     {ok, Node, Pid}.
 
@@ -347,13 +347,7 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
     NeedLogger = maps:get(verbose, RunOpts, false),
     application:set_env(erlperf, start_monitor, NeedLogger),
     ok = logger:set_handler_config(default, level, warning),
-    NeedToStop =
-        case application:start(erlperf) of
-            ok ->
-                true;
-            {error, {already_started,erlperf}} ->
-                false
-        end,
+    {ok, NeedToStop} = application:ensure_all_started(erlperf),
     % verbose?
     Logger =
         if NeedLogger ->
@@ -366,7 +360,7 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
         run_main(RunOpts, SqueezeOpts, Codes)
     after
         Logger =/= undefined andalso ep_file_log:stop(Logger),
-        NeedToStop andalso application:stop(erlperf)
+        [application:stop(App) || App <- NeedToStop]
     end.
 
 % profile
@@ -418,38 +412,49 @@ code_length(Code) ->
 %%%===================================================================
 %%% Benchmarking itself
 
-start_nodes([], Nodes) ->
-    Nodes;
-start_nodes([Host | Tail], Nodes) ->
-    NodeId = list_to_atom("job_" ++ integer_to_list(rand:uniform(65536))),
-    % TODO: use real erl_prim_loader inet with hosts equal to this host
-    Path = filename:dirname(code:where_is_file("erlperf.app")),
-    case slave:start_link(Host, NodeId, "-pa " ++ Path ++ " -setcookie " ++ atom_to_list(erlang:get_cookie())) of
-        {ok, Node} ->
-            start_nodes(Tail, [Node | Nodes]);
-        {error, {already_running, _}} ->
-            start_nodes([Host | Tail], Nodes)
-    end.
+%% OTP 25 support
+-dialyzer({no_missing_calls, start_nodes_slave/1}).
+-compile({nowarn_deprecated_function, [{slave, start_link, 3}, {slave, stop, 1}]}).
+-compile({nowarn_removed, [{slave, start_link, 3}, {slave, stop, 1}]}).
+
+start_nodes({module, peer}, HowMany) ->
+    Args = ["-pa", filename:dirname(code:where_is_file("erlperf.app")),
+        "-pa", filename:dirname(code:where_is_file("argparse.app"))],
+    [{ok, _Peer, _Node} = peer:start_link(#{name => peer:random_name(), args => Args}) || _ <- lists:seq(1, HowMany)];
+start_nodes({error, nofile}, HowMany) ->
+    start_nodes_slave(HowMany).
+
+start_nodes_slave(HowMany) ->
+    OsPid = os:getpid(),
+    [_, HostString] = string:split(atom_to_list(node()), "@"),
+    Host = list_to_atom(HostString),
+    %% TODO: use real erl_prim_loader inet with hosts equal to this host
+    %% TODO: un-hardcode dependencies (argparse)
+    Paths = ["-pa " ++ filename:dirname(code:where_is_file(F)) || F <- ["erlperf.app", "argparse.app"]],
+    Args = lists:join(" ", Paths) ++ " -setcookie " ++ atom_to_list(erlang:get_cookie()),
+    [begin
+         Uniq = erlang:unique_integer([positive]),
+         NodeId = list_to_atom(lists:concat(["job-", Uniq, "-", OsPid])),
+         {ok, Node} = slave:start_link(Host, NodeId, Args),
+         {ok, undefined, Node}
+     end || _ <- lists:seq(1, HowMany)].
 
 prepare_nodes(HowMany) ->
     not erlang:is_alive() andalso error(not_alive),
     % start multiple nodes, ensure cluster_monitor is here (start supervisor if needs to)
-    [_, HostString] = string:split(atom_to_list(node()), "@"),
-    Host = list_to_atom(HostString),
-    Nodes = start_nodes(lists:duplicate(HowMany, Host), []),
+    {_, Peers, Nodes} = lists:unzip3(start_nodes(code:ensure_loaded(peer1), HowMany)),
     % start 'erlperf' app on all slaves
-    Expected = lists:duplicate(HowMany, {ok, [erlperf]}),
-    %
+    Expected = lists:duplicate(HowMany, {ok, [argparse, erlperf]}),
     case rpc:multicall(Nodes, application, ensure_all_started, [erlperf], ?REMOTE_NODE_TIMEOUT) of
         {Expected, []} ->
-            Nodes;
+            {Peers, Nodes};
         Other ->
             error({start_failed, Other, Expected, Nodes})
     end.
 
 %% isolation requested: need to rely on cluster_monitor and other distributed things.
 run_impl(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
-    Nodes = prepare_nodes(length(Codes)),
+    {Peers, Nodes} = prepare_nodes(length(Codes)),
     Opts = maps:remove(isolation, Options),
     try
         % no timeout here (except that rpc itself could time out)
@@ -459,7 +464,12 @@ run_impl(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
         % now wait for everyone to respond
         lists:reverse(lists:foldl(fun (Key, Acc) -> [rpc:yield(Key) | Acc] end, [], Promises))
     after
-        [slave:stop(Node) || Node <- Nodes]
+        case Peers of
+            [undefined | _] ->
+                [slave:stop(Node) || Node <- Nodes];
+            Peers ->
+                [peer:stop(Peer) || Peer <- Peers]
+        end
     end;
 
 %% no isolation requested, do normal in-BEAM test
