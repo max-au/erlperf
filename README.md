@@ -293,6 +293,9 @@ Cluster-wide monitoring will reflect changes accordingly.
 
 ## Changelog
 
+Version 1.1.5:
+- support for OTP 25 (peer replacing slave)
+
 Version 1.1.4:
 - fixed an issue with pg already started
 - moved profiling to spawned process
