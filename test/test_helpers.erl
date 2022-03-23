@@ -13,10 +13,7 @@
     ensure_distributed/1,
     ensure_started/2,
     ensure_stopped/1,
-    maybe_undistribute/1,
-    redirect_io/0,
-    collect_io/1,
-    capture_io/1
+    maybe_undistribute/1
 ]).
 
 ensure_started(App, Config) ->
@@ -59,48 +56,4 @@ maybe_undistribute(Config) ->
         Pid when is_pid(Pid) ->
             net_kernel:stop(),
             proplists:delete(distribution, Config)
-    end.
-
-redirect_io() ->
-    OldGL = group_leader(),
-    IoProc = spawn(
-        fun() ->
-            collect_io(undefined, [])
-        end),
-    group_leader(IoProc, self()),
-    {IoProc, OldGL}.
-
-collect_io({IoProc, OldGL}) ->
-    group_leader(OldGL, self()),
-    IoProc ! {flush, self()},
-    receive
-        {flush, Data} ->
-            Data
-    end.
-
-capture_io(Fun) when is_function(Fun) ->
-    Pid = spawn(fun() ->
-        receive run -> ok end,
-        Fun()
-                end),
-    Mref = erlang:monitor(process,Pid),
-    group_leader(self(), Pid),
-    Pid ! run,
-    collect_io(Mref, []).
-
-collect_io(Mref, Ack) ->
-    receive
-        {'DOWN', Mref, _,_,_} ->
-            lists:flatten(io_lib:format("~s", [lists:reverse(Ack)]));
-        {io_request, From, Me, {put_chars, M, F, A}} ->
-            From ! {io_reply, Me, ok},
-            collect_io(Mref, [apply(M,F, A) | Ack]);
-        {io_request, From, Me, {put_chars, latin1, Binary}} ->
-            From ! {io_reply, Me, ok},
-            collect_io(Mref, [Binary | Ack]);
-        {io_request, From, Me, {put_chars, unicode, M, F, A}} ->
-            From ! {io_reply, Me, ok},
-            collect_io(Mref, [apply(M,F, A) | Ack]);
-        {flush, WhereTo} ->
-            WhereTo ! {flush, lists:reverse(Ack)}
     end.

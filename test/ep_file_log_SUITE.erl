@@ -55,11 +55,12 @@ console() ->
     [{doc, "Tests console logging"}].
 
 console(_Config) ->
-    {IoProc, GL} = test_helpers:redirect_io(),
-    {ok, Pid} = ep_file_log:start(IoProc),
+    ok = ct:capture_start(),
+    {ok, Pid} = ep_file_log:start(erlang:group_leader()),
     erlperf:run({timer, sleep, [1]}),
     ep_file_log:stop(Pid),
-    Console = test_helpers:collect_io({IoProc, GL}),
+    ok = ct:capture_stop(),
+    Console = ct:capture_get(),
     ?assertNotEqual([], Console).
 
 % test that we do *not* handle unknown stuff

@@ -143,6 +143,14 @@ start_link() ->
     Pid.
 
 %%--------------------------------------------------------------------
+%% helper functions
+capture_io(Fun) ->
+    ok = ct:capture_start(),
+    Fun(),
+    ok = ct:capture_stop(),
+    lists:flatten(ct:capture_get()).
+
+%%--------------------------------------------------------------------
 %% TEST CASES
 %% Permutations:
 %% Config permutations:
@@ -305,7 +313,7 @@ mfa_squeeze(_Config) ->
 % erlperf 'timer:sleep(1). -d 100'
 cmd_line_simple(_Config) ->
     Code = "timer:sleep(1).",
-    Out = test_helpers:capture_io(fun () -> erlperf:main([Code, "-d", "100"]) end),
+    Out = capture_io(fun() -> erlperf:main([Code, "-d", "100"]) end),
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
     ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
@@ -314,14 +322,14 @@ cmd_line_simple(_Config) ->
 % erlperf 'timer:sleep(1). -v'
 cmd_line_verbose(_Config) ->
     Code = "timer:sleep(1).",
-    Out = test_helpers:capture_io(fun () -> erlperf:main([Code, "-v"]) end),
+    Out = capture_io(fun () -> erlperf:main([Code, "-v"]) end),
     Lines = string:lexemes(Out, "\n"),
     ?assert(length(Lines) > 3),
     ok.
 
 % erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' -d 100 -s 5 -w 1 -c 2
 cmd_line_compare(_Config) ->
-    Out = test_helpers:capture_io(
+    Out = capture_io(
         fun () -> erlperf:main(["timer:sleep(1).", "timer:sleep(2).", "-s", "5", "-d", "100", "-w", "1", "-c", "2"]) end),
     ?assertNotEqual([], Out),
     % Code            Concurrency   Throughput   Relative
@@ -334,24 +342,24 @@ cmd_line_squeeze() ->
 
 % erlperf 'timer:sleep(1).' --sample_duration 50 --squeeze --min 2 --max 4 --threshold 2
 cmd_line_squeeze(_Config) ->
-    Out = test_helpers:capture_io(
+    Out = capture_io(
         fun () -> erlperf:main(["timer:sleep(1).", "--sample_duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
     ?assertNotEqual([], Out),
     ok.
 
 % erlperf -q
 cmd_line_usage(_Config) ->
-    Out = test_helpers:capture_io(fun () -> erlperf:main(["-q"]) end),
+    Out = capture_io(fun () -> erlperf:main(["-q"]) end),
     Line1 = "error: erlperf: required argument missing: code",
     ?assertEqual(Line1, lists:sublist(Out, length(Line1))),
-    Out2 = test_helpers:capture_io(fun () -> erlperf:main(["--un code"]) end),
+    Out2 = capture_io(fun () -> erlperf:main(["--un code"]) end),
     ?assertEqual("error: erlperf: unrecognised argument: --un code", lists:sublist(Out2, 48)),
     ok.
 
 % erlperf '{file,_}=code:is_loaded(slave).' --init 'code:ensure_loaded(slave).' --done 'code:purge(slave), code:delete(slave).'
 cmd_line_init(_Config) ->
     Code = "{file,_}=code:is_loaded(slave).",
-    Out = test_helpers:capture_io(fun () -> erlperf:main(
+    Out = capture_io(fun () -> erlperf:main(
         [Code, "--init", "code:ensure_loaded(slave).", "--done", "code:purge(slave), code:delete(slave)."])
                                   end),
     % verify 'done' was done
@@ -365,7 +373,7 @@ cmd_line_init(_Config) ->
 % erlperf 'runner(X) -> timer:sleep(X).' --init '1.' 'runner(Y) -> timer:sleep(Y).' --init '2.' -s 2 --duration 100
 cmd_line_double(_Config) ->
     Code = "runner(X)->timer:sleep(X).",
-    Out = test_helpers:capture_io(fun () -> erlperf:main([Code, "--init", "1.", Code, "--init", "2.", "-s", "2",
+    Out = capture_io(fun () -> erlperf:main([Code, "--init", "1.", Code, "--init", "2.", "-s", "2",
         "--duration", "100"]) end),
     [LN1, LN2, _LN3 | _] = string:split(Out, "\n", all),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
@@ -373,7 +381,7 @@ cmd_line_double(_Config) ->
     ok.
 
 cmd_line_triple(_Config) ->
-    Out = test_helpers:capture_io(fun () -> erlperf:main(["timer:sleep(1).", "-s", "2", "--duration", "100",
+    Out = capture_io(fun () -> erlperf:main(["timer:sleep(1).", "-s", "2", "--duration", "100",
         "timer:sleep(2).", "timer:sleep(3)."]) end),
     [LN1, _LN2, _LN3, LN4 | _] = string:split(Out, "\n", all),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
@@ -392,7 +400,7 @@ cmd_line_pg(_Config) ->
         _ ->
             ?assertEqual(undefined, whereis(scope)), %% ensure scope is not left
             Code = "runner(S)->ok=pg:join(S,self()),ok=pg:leave(S,self()).",
-            Out = test_helpers:capture_io(fun () -> erlperf:main(
+            Out = capture_io(fun () -> erlperf:main(
                 [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
                                           end),
             [LN1, LN2] = string:split(Out, "\n"),
@@ -404,7 +412,7 @@ cmd_line_pg(_Config) ->
 % erlperf '{rand, uniform, [100]}'
 cmd_line_mfa(_Config) ->
     Code = "{rand,uniform,[4]}",
-    Out = test_helpers:capture_io(fun () -> erlperf:main([Code]) end),
+    Out = capture_io(fun () -> erlperf:main([Code]) end),
     [LN1, LN2] = string:split(Out, "\n"),
     ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
     ?assertMatch([Code, "1" | _], string:lexemes(LN2, " ")),
@@ -427,7 +435,7 @@ cmd_line_recorded(Config) ->
             {ets, delete, [test_ets_tab, 100]}
         ])),
     %
-    Out = test_helpers:capture_io(fun () -> erlperf:main(
+    Out = capture_io(fun () -> erlperf:main(
         [RecFile, "--init", "ets:file2tab(\"" ++ EtsFile ++ "\")."])
                                   end),
     [LN1, LN2] = string:split(Out, "\n"),
@@ -443,7 +451,7 @@ cmd_line_profile(_Config) ->
         _ ->
             ?assertEqual(undefined, whereis(scope)), %% ensure runner is not left from the last run
             Code = "runner(Arg)->ok=pg:join(Arg,1,self()),ok=pg:leave(Arg,1,self()).",
-            Out = test_helpers:capture_io(fun () -> erlperf:main(
+            Out = capture_io(fun () -> erlperf:main(
                 [Code, "--init_runner", "element(2, pg:start_link(scope)).", "--profile"])
                                           end),
             ?assertEqual(undefined, whereis(scope)), %% ensure runner exited

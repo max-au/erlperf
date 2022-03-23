@@ -82,7 +82,7 @@ monitor_cluster(Config) ->
     % start cluster monitor for [time, sched_util, jobs] only
     {ok, Pid} = ep_cluster_monitor:start({?MODULE, handle_update, [Control]}, [time, sched_util, jobs]),
     %
-    {IoProc, GL} = test_helpers:redirect_io(),
+    ok = ct:capture_start(),
     {ok, ClusterMonPid} = ep_cluster_monitor:start(),
     LogFile = filename:join(proplists:get_value(priv_dir, Config), "cluster_log.txt"),
     {ok, ClusterFilePid} = ep_cluster_monitor:start(LogFile, [time, jobs]),
@@ -105,7 +105,8 @@ monitor_cluster(Config) ->
     %
     ?assertNotEqual([], History),
     %
-    Console = test_helpers:collect_io({IoProc, GL}),
+    ct:capture_stop(),
+    Console = ct:capture_get(),
     %
     ok = ep_cluster_monitor:stop(ClusterFilePid),
     ok = ep_cluster_monitor:stop(ClusterMonPid),

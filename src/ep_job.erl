@@ -280,7 +280,9 @@ set_concurrency_impl(Concurrency, #state{workers = Workers, init_runner = InitRu
     runner = Runner, cref = CRef})
     when length(Workers) < Concurrency ->
     Hired = [spawn_link(
-        fun () -> runner_impl(Runner, call(InitRunner, IR), CRef) end)
+        fun () ->
+            runner_impl(Runner, call(InitRunner, IR), CRef)
+        end)
         || _ <- lists:seq(length(Workers) + 1, Concurrency)],
     Workers ++ Hired;
 

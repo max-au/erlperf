@@ -347,7 +347,7 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
     NeedLogger = maps:get(verbose, RunOpts, false),
     application:set_env(erlperf, start_monitor, NeedLogger),
     ok = logger:set_handler_config(default, level, warning),
-    {ok, NeedToStop} = application:ensure_all_started(erlperf),
+    {ok, Sup} = erlperf_sup:start_link(),
     % verbose?
     Logger =
         if NeedLogger ->
@@ -360,7 +360,7 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
         run_main(RunOpts, SqueezeOpts, Codes)
     after
         Logger =/= undefined andalso ep_file_log:stop(Logger),
-        [application:stop(App) || App <- NeedToStop]
+        gen:stop(Sup)
     end.
 
 % profile

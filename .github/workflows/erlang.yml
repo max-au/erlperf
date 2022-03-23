@@ -2,7 +2,7 @@ name: Build, Test, Dialyze
 
 on:
   pull_request:
-    types: [ opened, synchronize ]
+    types: [ opened, reopened, synchronize ]
   push:
     branches:
       - 'master'
