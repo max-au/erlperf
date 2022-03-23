@@ -388,13 +388,16 @@ run_main(RunOpts, SqueezeOps, [Code]) when map_size(SqueezeOps) > 0 ->
 % crypto:strong_rand_bytes(2).           1      1485 Ki        35%
 
 run_main(RunOpts, _, Codes0) ->
+    MaxColumns = case io:columns() of {ok, C} -> C; _ -> 80 end,
     Results = run_impl(Codes0, RunOpts, undefined),
     MaxQPS = lists:max(Results),
     Concurrency = maps:get(concurrency, RunOpts, 1),
     Codes = [maps:get(runner, Code) || Code <- Codes0],
-    MaxCodeLen = min(lists:max([code_length(Code) || Code <- Codes]) + 4, 62),
-    io:format("~*s     ||        QPS     Rel~n", [-MaxCodeLen, "Code"]),
     Zipped = lists:reverse(lists:keysort(2, lists:zip(Codes, Results))),
+    %% ~6 + ~10 + ~6 format is 22 + 4 spaces means 26 total, code gets
+    %%  columns - 26
+    MaxCodeLen = min(lists:max([code_length(Code) || Code <- Codes]) + 4, MaxColumns - 26),
+    io:format("~*s     ||        QPS     Rel~n", [-MaxCodeLen, "Code"]),
     [io:format("~*s ~6b ~10s ~6b%~n", [-MaxCodeLen, format_code(Code),
         Concurrency, format_number(QPS), QPS * 100 div MaxQPS]) ||
         {Code, QPS}  <- Zipped].
