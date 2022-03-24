@@ -1,0 +1,40 @@
+stages:
+  - test
+  - deploy
+
+test-default-docker:
+  tags:
+    - linux
+    - x86_64
+  image: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/erlang:latest
+  stage: test
+  script:
+    - rebar3 compile
+    - rebar3 edoc
+    - rebar3 dialyzer
+    - rebar3 ct
+    - rebar3 as prod escriptize
+    - ./erlperf 'timer:sleep(1).'
+  after_script:
+    - mv "_build/test/logs" ./public
+  artifacts:
+    when: always
+    paths:
+      - "./public"
+    expire_in: 3 days
+    reports:
+      junit:
+        - "./public/last/junit_report.xml"
+
+# Pages: publishing Common Test results
+pages:
+  stage: deploy
+  needs:
+    - test-default-docker
+  script:
+    - echo "Uploading to pages"
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

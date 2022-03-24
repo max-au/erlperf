@@ -1,11 +1,9 @@
 {application, erlperf,
  [{description, "Erlang Performance & Benchmarking Suite"},
-  {vsn, "1.1.5"},
+  {vsn, "2.0.0"},
   {registered, [
-    erlperf_sup, ep_monitor_sup, ep_job_sup, ep_monitor,
-    ep_history, ep_file_log, ep_cluster_history,
-    ep_cluster_monitor, ep_monitor_proxy,
-    ep_job_event, ep_system_event
+    erlperf_sup, erlperf_job_sup, erlperf_monitor,
+   erlperf_history, erlperf_file_log, erlperf_cluster_monitor
   ]},
   {mod, {erlperf_app, []}},
   {applications,
@@ -17,6 +15,5 @@
   {modules, []},
 
   {licenses, ["BSD 3-clause clear"]},
-  {links, [{"Github", "https://github.com/max-au/erlperf"}]},
-  {exclude_files, ["priv/"]}
+  {links, [{"Github", "https://github.com/max-au/erlperf"}]}
  ]}.

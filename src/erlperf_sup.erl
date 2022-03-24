@@ -1,12 +1,11 @@
-%%%-------------------------------------------------------------------
-%%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (C) 2019, Maxim Fedorov
+%%% @copyright (C) 2019-2022, Maxim Fedorov
 %%% @doc
-%%%     Top-level supervisor, spawns job supervisor and monitor.
+%%% Top-level supervisor. Always starts process group scope
+%%%  for `erlperf'. Depending on the configuration starts
+%%%  a number of jobs or a cluster-wide monitoring solution.
 %%% @end
-%%%-------------------------------------------------------------------
-
 -module(erlperf_sup).
+-author("maximfca@gmail.com").
 
 -behaviour(supervisor).
 
@@ -15,46 +14,37 @@
     init/1
 ]).
 
--include("monitor.hrl").
-
 -spec start_link() -> supervisor:startlink_ret().
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
-    SupFlags = #{strategy => rest_for_one,
-                 intensity => 2,
-                 period => 60},
-    %% OTP 24 support: pg2 module was removed, replaced with pg
-    %% However `pg` is not started by default, so run it as a part
-    %%  of erlperf supervision tree
-    PGSpec =
-        try
-            pg:module_info(),
-            undefined = whereis(pg),
-            [#{id => pg, start => {pg, start_link, []}}]
-        catch
-            error:undef -> [];
-            error:{badmatch, Pid} when is_pid(Pid) -> []
-        end,
+    SupFlags = #{strategy => rest_for_one, intensity => 2, period => 60},
 
     ChildSpecs = [
-        % event bus for job-related changes, started-stopped jobs
-        #{id => ?JOB_EVENT,
-            start => {gen_event, start_link, [{local, ?JOB_EVENT}]},
-            modules => dynamic},
+        %% start own pg scope, needed for cluster-wide operations
+        %% even if the node-wide monitoring is not running, the scope
+        %% needs to be up to send "job started" events for the cluster
+        #{
+            id => pg,
+            start => {pg, start_link, [erlperf]},
+            modules => [pg]
+        },
 
-        % supervisor for all concurrently running jobs
-        #{id => ep_job_sup,
-            start => {ep_job_sup, start_link, []},
-            type => supervisor,
-            modules => [ep_job_sup]},
+        %% monitoring
+        #{
+            id => erlperf_monitor,
+            start => {erlperf_monitor, start_link, []},
+            modules => [erlperf_monitor]
+        },
 
-        % supervisor for node & cluster monitoring
-        #{id => ep_monitor_sup,
-            start => {ep_monitor_sup, start_link, []},
+        %% supervisor for statically started jobs
+        #{
+            id => erlperf_job_sup,
+            start => {erlperf_job_sup, start_link, []},
             type => supervisor,
-            modules => [ep_monitor_sup]}
-        ],
-    {ok, {SupFlags, PGSpec ++ ChildSpecs}}.
+            modules => [erlperf_job_sup]
+        }],
+
+    {ok, {SupFlags, ChildSpecs}}.

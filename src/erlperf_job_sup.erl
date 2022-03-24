@@ -1,11 +1,8 @@
-%%%-------------------------------------------------------------------
-%%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (C) 2019, Maxim Fedorov
-%%%   Supervisor for all jobs running on this node.
+%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% Supervises statically started jobs.
 %%% @end
-%%%-------------------------------------------------------------------
-
--module(ep_job_sup).
+-module(erlperf_job_sup).
+-author("maximfca@gmail.com").
 
 -behaviour(supervisor).
 
@@ -26,8 +23,8 @@ init([]) ->
             period => 60},
         [
             #{
-                id => ep_job,
-                start => {ep_job, start_link, []},
-                modules => [ep_job]
+                id => erlperf_job,
+                start => {erlperf_job, start_link, []},
+                modules => [erlperf_job]
             }
         ]}}.

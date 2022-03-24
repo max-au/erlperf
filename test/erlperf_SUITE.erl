@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (c) 2019 Maxim Fedorov
+%%% @copyright (c) 2019-2022 Maxim Fedorov
 %%% @doc
 %%%     Tests benchmark module, machine-readable output for benchmarks.
 %%% @end
@@ -10,14 +10,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 
--export([
-    suite/0, all/0, groups/0,
-    init_per_testcase/2,
-    end_per_testcase/2,
-    init_per_group/2,
-    end_per_group/2,
-    init_per_suite/1,
-    end_per_suite/1]).
+-export([suite/0, all/0, groups/0]).
 
 -export([
     start_link/0,
@@ -33,13 +26,13 @@
     code_gen_server/1, mfa_concurrency/1, mfa_no_concurrency/1,
     code_extra_node/1, mixed/0, mixed/1,
     crasher/0, crasher/1, undefer/0, undefer/1, compare/1,
-    errors/0, errors/1, formatters/1]).
+    errors/0, errors/1]).
 
 -export([
     cmd_line_simple/1, cmd_line_verbose/1, cmd_line_compare/1,
     cmd_line_squeeze/1, cmd_line_usage/1, cmd_line_init/1,
     cmd_line_double/1, cmd_line_triple/1, cmd_line_pg/1, cmd_line_mfa/1,
-    cmd_line_recorded/1, cmd_line_profile/1,
+    cmd_line_recorded/1,
     cmd_line_squeeze/0
 ]).
 
@@ -52,30 +45,6 @@
 
 suite() ->
     [{timetrap, {seconds, 10}}].
-
-init_per_suite(Config) ->
-    Config.
-
-end_per_suite(Config) ->
-    test_helpers:maybe_undistribute(Config).
-
-init_per_group(cmdline, Config) ->
-    Config;
-init_per_group(_, Config) ->
-    test_helpers:ensure_started(erlperf, Config).
-
-end_per_group(cmdline, Config) ->
-    Config;
-end_per_group(_, Config) ->
-    test_helpers:ensure_stopped(Config).
-
-init_per_testcase(code_extra_node, Config) ->
-    test_helpers:ensure_distributed(Config);
-init_per_testcase(_TestCase, Config) ->
-    Config.
-
-end_per_testcase(_TestCase, _Config) ->
-    ok.
 
 groups() ->
     [
@@ -98,8 +67,7 @@ groups() ->
             mixed,
             crasher, undefer,
             compare,
-            errors,
-            formatters
+            errors
         ]},
         {cmdline, [sequential], [
             cmd_line_simple,
@@ -112,8 +80,7 @@ groups() ->
             cmd_line_triple,
             cmd_line_pg,
             cmd_line_mfa,
-            cmd_line_recorded,
-            cmd_line_profile
+            cmd_line_recorded
         ]},
         {squeeze, [], [
             mfa_squeeze
@@ -136,7 +103,7 @@ handle_call({sleep, Num}, _From, State) ->
     {reply, ok, State}.
 
 handle_cast(_Req, _State) ->
-    error(badarg).
+    erlang:error(notsup).
 
 start_link() ->
     {ok, Pid} = gen_server:start_link(?MODULE, [], []),
@@ -162,11 +129,13 @@ capture_io(Fun) ->
 %%  -warmup
 %%  -interval
 
-mfa(_Config) ->
-    C = erlperf:run({timer, sleep, [1]}),
-    ?assert(C > 250 andalso C < 1101).
+mfa(Config) when is_list(Config) ->
+    C = erlperf:run(timer, sleep, [1]),
+    ?assert(C > 250 andalso C < 1101),
+    Time = erlperf:time({timer, sleep, [1]}, 100),
+    ?assert(Time > 100000 andalso Time < 300000). %% between 100 and 300 ms
 
-mfa_with_cv(_Config) ->
+mfa_with_cv(Config) when is_list(Config) ->
     C = erlperf:run({timer, sleep, [1]}, #{cv => 0.05}),
     ?assert(C > 250 andalso C < 1101).
 
@@ -174,51 +143,53 @@ mfa_with_tiny_cv() ->
     [{doc, "Tests benchmarking with very small coefficient of variation, potentially long"},
         {timetrap, {seconds, 60}}].
 
-mfa_with_tiny_cv(_Config) ->
+mfa_with_tiny_cv(Config) when is_list(Config) ->
     C = erlperf:run({timer, sleep, [1]}, #{samples => 2, interval => 100, cv => 0.002}),
     ?assert(C > 250 andalso C < 1101).
 
-mfa_list(_Config) ->
+mfa_list(Config) when is_list(Config) ->
     C = erlperf:run([{rand, seed, [exrop]}, {timer, sleep, [1]}, {rand, uniform, [20]}, {timer, sleep, [1]}]),
-    ?assert(C > 200 andalso C < 450).
+    ?assert(C > 200 andalso C < 450, {out_of_range, C, 200, 450}).
 
-mfa_fun(_Config) ->
+mfa_fun(Config) when is_list(Config) ->
     C = erlperf:run(fun () -> timer:sleep(1) end),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-mfa_fun1(_Config) ->
-    C = erlperf:run(fun (undefined) -> timer:sleep(1); (ok) -> timer:sleep(1) end),
-    ?assert(C > 250 andalso C < 1101).
+mfa_fun1(Config) when is_list(Config) ->
+    C = erlperf:run(#{runner => fun (undefined) -> timer:sleep(1); (ok) -> timer:sleep(1) end,
+        init_runner => fun() -> undefined end}),
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-code(_Config) ->
+code(Config) when is_list(Config) ->
     C = erlperf:run("timer:sleep(1)."),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-code_fun(_Config) ->
+code_fun(Config) when is_list(Config) ->
     C = erlperf:run("runner() -> timer:sleep(1)."),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-code_fun1(_Config) ->
-    C = erlperf:run("runner(undefined) -> timer:sleep(1)."),
-    ?assert(C > 250 andalso C < 1101).
+code_fun1(Config) when is_list(Config) ->
+    C = erlperf:run(#{runner => "runner(undefined) -> timer:sleep(1), undefined.",
+        init_runner => "undefined."}),
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-mfa_init(_Config) ->
+mfa_init(Config) when is_list(Config) ->
     C = erlperf:run(#{
         runner => fun (1) -> timer:sleep(1) end,
         init => [{rand, seed, [exrop]}, {rand, uniform, [100]}],
         init_runner => {erlang, abs, [-1]}
     }),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-mfa_fun_init(_Config) ->
+mfa_fun_init(Config) when is_list(Config) ->
     C = erlperf:run(#{
-        runner => {timer, sleep, []},
+        runner => fun(Timeout) -> timer:sleep(Timeout) end,
         init => fun () -> ok end,
         init_runner => fun (ok) -> 1 end
     }),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-code_gen_server(_Config) ->
+code_gen_server(Config) when is_list(Config) ->
     C = erlperf:run(#{
         runner => "run(Pid) -> gen_server:call(Pid, {sleep, 1}).",
         init => "Pid = " ++ atom_to_list(?MODULE) ++ ":start_link(), register(server, Pid), Pid.",
@@ -226,13 +197,13 @@ code_gen_server(_Config) ->
         done => "stop(Pid) -> gen_server:stop(Pid)."
     }),
     ?assertEqual(undefined, whereis(server)),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-mfa_concurrency(_Config) ->
+mfa_concurrency(Config) when is_list(Config) ->
     C = erlperf:run({timer, sleep, [1]}, #{concurrency => 2}),
-    ?assert(C > 500 andalso C < 2202).
+    ?assert(C > 500 andalso C < 2202, {out_of_range, C, 500, 2202}).
 
-mfa_no_concurrency(_Config) ->
+mfa_no_concurrency(Config) when is_list(Config) ->
     C = erlperf:run(
         #{
             runner => fun (Pid) -> gen_server:call(Pid, {sleep, 1}) end,
@@ -241,62 +212,66 @@ mfa_no_concurrency(_Config) ->
             done => {gen_server, stop, []}
         },
         #{concurrency => 4}),
-    ?assert(C > 250 andalso C < 1101).
+    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
 
-code_extra_node(_Config) ->
+code_extra_node(Config) when is_list(Config) ->
     C = erlperf:run(#{
-            runner => "{ok, Timer} = application:get_env(kernel, test), timer:sleep(Timer).",
+            runner => "{ok, 1} = application:get_env(kernel, test), timer:sleep(1).",
             init => "application:set_env(kernel, test, 1)."
         },
         #{concurrency => 2, sample_duration => 100, isolation => #{}}),
     ?assertEqual(undefined, application:get_env(kernel, test)),
     ct:pal("~p", [C]),
-    ?assert(C > 50 andalso C < 220).
+    ?assert(C > 50 andalso C < 220, {out_of_range, C, 50, 220}).
 
 crasher() ->
     [{doc, "Tests job that crashes"}].
 
-crasher(_Config) ->
-    C = erlperf:run({erlang, throw, [ball]}, #{concurrency => 2}),
-    ?assertEqual(0, C).
+crasher(Config) when is_list(Config) ->
+    ?assertException(error, {benchmark, {'EXIT', _, _}},
+        erlperf:run({erlang, throw, [ball]}, #{concurrency => 2})).
 
 mixed() ->
     [{doc, "Tests mixed approach when code co-exists with MFAs"}].
 
-mixed(_Config) ->
+mixed(Config) when is_list(Config) ->
     C = erlperf:run(#{
         runner => [{timer, sleep, [1]}, {timer, sleep, [2]}],
         init => "rand:uniform().",
         init_runner => fun (Int) -> Int end
     }),
-    ?assert(C > 100 andalso C < 335).
+    ?assert(C > 100 andalso C < 335, {out_of_range, C, 100, 335}).
 
 undefer() ->
     [{doc, "Tests job undefs - e.g. wrong module name"}].
 
-undefer(_Config) ->
-    ?assertException(error, {badmatch, {error, {{module_not_found, '$cannot_be_this'}, _}}},
+undefer(Config) when is_list(Config) ->
+    ?assertException(error, {benchmark, {'EXIT', _, {undef, _}}},
         erlperf:run({'$cannot_be_this', throw, []}, #{concurrency => 2})).
 
-compare(_Config) ->
+compare(Config) when is_list(Config) ->
     [C1, C2] = erlperf:compare(["timer:sleep(1).", "timer:sleep(2)."], #{sample_duration => 100}),
-    ?assert(C1 > C2).
+    ?assert(C1 > C2),
+    %% low-overhead comparison benchmark
+    [T1, T2] = erlperf:benchmark([#{runner => {timer, sleep, [1]}}, #{runner => "timer:sleep(2)."}],
+        #{sample_duration => undefined, samples => 50}, undefined),
+    ?assert(T1 < T2).
 
 errors() ->
     [{doc, "Tests various error conditions"}].
 
-errors(_Config) ->
-    ?assertException(error, {badmatch, {error, {"empty callable", _}}},
+errors(Config) when is_list(Config) ->
+    ?assertException(error, {generate, {parse, init, _}},
         erlperf:run(#{runner => {erlang, node, []}, init => []})),
-    ?assertException(error, {badmatch, {error, {"empty callable", _}}},
+    ?assertException(error, {generate, {parse, runner, _}},
         erlperf:run(#{runner => []})),
-    ?assertException(error, {badmatch, {error, {"empty callable", _}}},
+    ?assertException(error, {generate, {parse, runner, _}},
         erlperf:run(#{runner => {[]}})).
 
 mfa_squeeze() ->
     [{timetrap, {seconds, 120}}].
 
-mfa_squeeze(_Config) ->
+mfa_squeeze(Config) when is_list(Config) ->
     case erlang:system_info(schedulers_online) of
         LowCPU when LowCPU < 3 ->
             skip;
@@ -310,113 +285,148 @@ mfa_squeeze(_Config) ->
 %%--------------------------------------------------------------------
 %% command-line testing
 
+parse_qps(QPST, "") -> list_to_integer(QPST);
+parse_qps(QPST, "Ki") -> list_to_integer(QPST) * 1000;
+parse_qps(QPST, "Mi") -> list_to_integer(QPST) * 1000000;
+parse_qps(QPST, "Gi") -> list_to_integer(QPST) * 1000000000.
+
+parse_duration(TT, "ns") -> list_to_integer(TT) div 1000;
+parse_duration(TT, "us") -> list_to_integer(TT);
+parse_duration(TT, "ms") -> list_to_integer(TT) * 1000;
+parse_duration(TT, "s") -> list_to_integer(TT) * 1000000.
+
+filtersplit(Str, Sep) ->
+    [L || L <- string:split(Str, Sep, all), L =/= ""].
+
+parse_out(Out) ->
+    [Header | Lines] = filtersplit(Out, "\n"),
+    case filtersplit(Header, " ") of
+        ["Code", "||", "QPS", "Time"] ->
+            [begin
+                 case filtersplit(Ln, " ") of
+                     [Code, ConcT, QPST, TT, TTU] ->
+                         {Code, list_to_integer(ConcT), parse_qps(QPST, ""), parse_duration(TT, TTU)};
+                     [Code, ConcT, QPST, QU, TT, TTU] ->
+                         {Code, list_to_integer(ConcT), parse_qps(QPST, QU), parse_duration(TT, TTU)}
+                 end
+             end || Ln <- Lines];
+        ["Code", "||", "QPS", "Time", "Rel"] ->
+            [begin
+                 case filtersplit(Ln, " ") of
+                     [Code, ConcT, QPST, TT, TTU, Rel] ->
+                         {Code, list_to_integer(ConcT), parse_qps(QPST, ""), parse_duration(TT, TTU),
+                             list_to_integer(lists:droplast(Rel))};
+                     [Code, ConcT, QPST, QU, TT, TTU, Rel] ->
+                         {Code, list_to_integer(ConcT), parse_qps(QPST, QU), parse_duration(TT, TTU),
+                             list_to_integer(lists:droplast(Rel))}
+                 end
+             end || Ln <- Lines];
+        _BadRet ->
+            ct:pal(Out),
+            ?assert(false)
+    end.
+
 % erlperf 'timer:sleep(1). -d 100'
-cmd_line_simple(_Config) ->
+cmd_line_simple(Config) when is_list(Config) ->
     Code = "timer:sleep(1).",
-    Out = capture_io(fun() -> erlperf:main([Code, "-d", "100"]) end),
-    [LN1, LN2] = string:split(Out, "\n"),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1", _, "100%\n"], string:lexemes(LN2, " ")),
-    ok.
+    Out = capture_io(fun() -> erlperf_cli:main([Code, "-d", "100"]) end),
+    [{Code, 1, C, T}] = parse_out(Out),
+    ?assert(C > 25 andalso C < 110, {qps, C}),
+    ?assert(T > 1000 andalso T < 3000, {time, T}).
 
 % erlperf 'timer:sleep(1). -v'
-cmd_line_verbose(_Config) ->
+cmd_line_verbose(Config) when is_list(Config) ->
     Code = "timer:sleep(1).",
-    Out = capture_io(fun () -> erlperf:main([Code, "-v"]) end),
-    Lines = string:lexemes(Out, "\n"),
+    Out = capture_io(fun () -> erlperf_cli:main([Code, "-v"]) end),
+    Lines = filtersplit(Out, "\n"),
+    %% TODO: actually verify that stuff printed is monitoring stuff
     ?assert(length(Lines) > 3),
-    ok.
+    %% parse last 2 lines
+    [{Code, 1, C, T}] = parse_out(lists:join("\n", lists:sublist(Lines, length(Lines) - 1, 2))),
+    ?assert(C > 250 andalso C < 1101, {qps, C}),
+    ?assert(T > 1000 andalso T < 3000, {time, T}).
 
-% erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' -d 100 -s 5 -w 1 -c 2
-cmd_line_compare(_Config) ->
+% erlperf 'timer:sleep(1).' 'timer:sleep(2).' -d 100 -s 5 -w 1 -c 2
+cmd_line_compare(Config) when is_list(Config) ->
     Out = capture_io(
-        fun () -> erlperf:main(["timer:sleep(1).", "timer:sleep(2).", "-s", "5", "-d", "100", "-w", "1", "-c", "2"]) end),
-    ?assertNotEqual([], Out),
-    % Code            Concurrency   Throughput   Relative
-    % timer:sleep().            2          950       100%
-    % timer:sleep(2).           2          475        50%
-    ok.
+        fun () -> erlperf_cli:main(["timer:sleep(1).", "timer:sleep(2).", "-s", "5", "-d", "100", "-w", "1", "-c", "2"]) end),
+    % Code            Concurrency   Throughput      Time      Rel
+    % timer:sleep().            2          950    100 ns     100%
+    % timer:sleep(2).           2          475    200 ns      50%
+    [{_Code, 2, C, T, R}, {_Code2, 2, C2, T2, R2}] = parse_out(Out),
+    ?assert(C > 66 andalso C < 220, {qps, C}),
+    ?assert(C2 > 50 andalso C2 < 110, {qps, C2}),
+    ?assert(T < T2),
+    ?assert(R > R2).
 
 cmd_line_squeeze() ->
     [{doc, "Tests concurrency test via command line"}, {timetrap, {seconds, 30}}].
 
 % erlperf 'timer:sleep(1).' --sample_duration 50 --squeeze --min 2 --max 4 --threshold 2
-cmd_line_squeeze(_Config) ->
+cmd_line_squeeze(Config) when is_list(Config) ->
     Out = capture_io(
-        fun () -> erlperf:main(["timer:sleep(1).", "--sample_duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
-    ?assertNotEqual([], Out),
-    ok.
+        fun () -> erlperf_cli:main(["timer:sleep(1).", "--duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
+    [{_Code, 4, C, T}] = parse_out(Out),
+    ?assert(C > 50 andalso C < 220, {qps, C}),
+    ?assert(T > 1000 andalso T < 3000, {time, T}).
 
 % erlperf -q
-cmd_line_usage(_Config) ->
-    Out = capture_io(fun () -> erlperf:main(["-q"]) end),
-    Line1 = "error: erlperf: required argument missing: code",
+cmd_line_usage(Config) when is_list(Config) ->
+    Out = capture_io(fun () -> erlperf_cli:main(["-q"]) end),
+    Line1 = "Error: erlperf: required argument missing: code",
     ?assertEqual(Line1, lists:sublist(Out, length(Line1))),
-    Out2 = capture_io(fun () -> erlperf:main(["--un code"]) end),
-    ?assertEqual("error: erlperf: unrecognised argument: --un code", lists:sublist(Out2, 48)),
+    Out2 = capture_io(fun () -> erlperf_cli:main(["--un code"]) end),
+    ?assertEqual("Error: erlperf: unrecognised argument: --un code", lists:sublist(Out2, 48)),
     ok.
 
-% erlperf '{file,_}=code:is_loaded(slave).' --init 'code:ensure_loaded(slave).' --done 'code:purge(slave), code:delete(slave).'
-cmd_line_init(_Config) ->
-    Code = "{file,_}=code:is_loaded(slave).",
-    Out = capture_io(fun () -> erlperf:main(
-        [Code, "--init", "code:ensure_loaded(slave).", "--done", "code:purge(slave), code:delete(slave)."])
+% erlperf '{file,_}=code:is_loaded(pool).' --init 'code:ensure_loaded(pool).' --done 'code:purge(pool), code:delete(pool).'
+cmd_line_init(Config) when is_list(Config) ->
+    Code = "{file,_}=code:is_loaded(pool).",
+    Out = capture_io(fun () -> erlperf_cli:main(
+        [Code, "--init", "code:ensure_loaded(pool).", "--done", "code:purge(pool), code:delete(pool)."])
                                   end),
     % verify 'done' was done
-    ?assertEqual(false, code:is_loaded(slave)),
+    ?assertEqual(false, code:is_loaded(pool)),
     % verify output
-    [LN1, LN2] = string:split(Out, "\n"),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " ")),
-    ok.
+    [{_Code, 1, C, T}] = parse_out(Out),
+    ?assert(C > 50, {qps, C}),
+    ?assert(T > 0, {time, T}).
 
 % erlperf 'runner(X) -> timer:sleep(X).' --init '1.' 'runner(Y) -> timer:sleep(Y).' --init '2.' -s 2 --duration 100
-cmd_line_double(_Config) ->
+cmd_line_double(Config) when is_list(Config) ->
     Code = "runner(X)->timer:sleep(X).",
-    Out = capture_io(fun () -> erlperf:main([Code, "--init", "1.", Code, "--init", "2.", "-s", "2",
+    Out = capture_io(fun () -> erlperf_cli:main([Code, "--init_runner", "1.", Code, "--init_runner", "2.", "-s", "2",
         "--duration", "100"]) end),
-    [LN1, LN2, _LN3 | _] = string:split(Out, "\n", all),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1", _, "100%"], string:lexemes(LN2, " ")),
-    ok.
+    [{Code, 1, C, T, R}, {Code, 1, C2, T2, R2}] = parse_out(Out),
+    ?assert(C > 25 andalso C < 110, {qps, C}),
+    ?assert(C2 > 25 andalso C2 < 55, {qps, C2}),
+    ?assert(T < T2),
+    ?assert(R > R2).
 
-cmd_line_triple(_Config) ->
-    Out = capture_io(fun () -> erlperf:main(["timer:sleep(1).", "-s", "2", "--duration", "100",
+cmd_line_triple(Config) when is_list(Config) ->
+    Out = capture_io(fun () -> erlperf_cli:main(["timer:sleep(1).", "-s", "2", "--duration", "100",
         "timer:sleep(2).", "timer:sleep(3)."]) end),
-    [LN1, _LN2, _LN3, LN4 | _] = string:split(Out, "\n", all),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    [_, "1", TS3QPSS, TS3PercentS] = string:lexemes(LN4, " "),
-    TS3QPS = list_to_integer(TS3QPSS),
-    TS3Percent = list_to_integer(lists:droplast(TS3PercentS)),
-    ?assert(TS3QPS > 20 andalso TS3QPS < 30, {"expected between 20 and 30, got", TS3QPS}),
-    ?assert(TS3Percent > 40 andalso TS3Percent < 60, {"expected between 40 and 60, got", TS3QPS}),
+    [_, _, {_, 1, C3, _T3, R3}] = parse_out(Out),
+    ?assert(C3 > 20 andalso C3 < 30, {"expected between 20 and 30, got", C3}),
+    ?assert(R3 > 40 andalso R3 < 60, {"expected between 40 and 60, got", R3}),
     ok.
 
 % erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
-cmd_line_pg(_Config) ->
-    case code:which(pg) of
-        non_existing ->
-            {skip, {otp_version, "pg is not supported"}};
-        _ ->
-            ?assertEqual(undefined, whereis(scope)), %% ensure scope is not left
-            Code = "runner(S)->ok=pg:join(S,self()),ok=pg:leave(S,self()).",
-            Out = capture_io(fun () -> erlperf:main(
-                [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
-                                          end),
-            [LN1, LN2] = string:split(Out, "\n"),
-            ?assertEqual(undefined, whereis(scope)), %% ensure runner exited
-            ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-            ?assertMatch([Code, "1", _, _, "100%\n"], string:lexemes(LN2, " "))
-    end.
+cmd_line_pg(Config) when is_list(Config) ->
+    ?assertEqual(undefined, whereis(scope)), %% ensure scope is not left
+    Code = "runner(S)->pg:join(S,g,self()),pg:leave(S,g,self()).",
+    Out = capture_io(fun () -> erlperf_cli:main(
+        [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
+                                  end),
+    ?assertEqual(undefined, whereis(scope)), %% ensure runner exited
+    [{_Code, 1, C, _T}] = parse_out(Out),
+    ?assert(C > 100, {qps, C}).
 
-% erlperf '{rand, uniform, [100]}'
-cmd_line_mfa(_Config) ->
+% erlperf '{rand, uniform, [4]}'
+cmd_line_mfa(Config) when is_list(Config) ->
     Code = "{rand,uniform,[4]}",
-    Out = capture_io(fun () -> erlperf:main([Code]) end),
-    [LN1, LN2] = string:split(Out, "\n"),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
-    ?assertMatch([Code, "1" | _], string:lexemes(LN2, " ")),
-    ok.
+    Out = capture_io(fun () -> erlperf_cli:main([Code]) end),
+    [{Code, 1, _C, _T}] = parse_out(Out).
 
 % erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 'ets:file2tab("pg2.tab").'
 cmd_line_recorded(Config) ->
@@ -435,41 +445,13 @@ cmd_line_recorded(Config) ->
             {ets, delete, [test_ets_tab, 100]}
         ])),
     %
-    Out = capture_io(fun () -> erlperf:main(
+    Out = capture_io(fun () -> erlperf_cli:main(
         [RecFile, "--init", "ets:file2tab(\"" ++ EtsFile ++ "\")."])
                                   end),
     [LN1, LN2] = string:split(Out, "\n"),
-    ?assertEqual(["Code", "||", "QPS", "Rel"], string:lexemes(LN1, " ")),
+    ?assertEqual(["Code", "||", "QPS", "Time"], string:lexemes(LN1, " ")),
     ?assertMatch(["[{ets,insert,[test_ets_tab,{100,40}]},", "...]", "1" | _], string:lexemes(LN2, " ")),
     ok.
-
-% profiler test
-cmd_line_profile(_Config) ->
-    case code:which(pg) of
-        non_existing ->
-            {skip, {otp_version, "pg is not supported"}};
-        _ ->
-            ?assertEqual(undefined, whereis(scope)), %% ensure runner is not left from the last run
-            Code = "runner(Arg)->ok=pg:join(Arg,1,self()),ok=pg:leave(Arg,1,self()).",
-            Out = capture_io(fun () -> erlperf:main(
-                [Code, "--init_runner", "element(2, pg:start_link(scope)).", "--profile"])
-                                          end),
-            ?assertEqual(undefined, whereis(scope)), %% ensure runner exited
-            [LN1 | _] = string:split(Out, "\n"),
-            ?assertEqual("Reading trace data...", LN1)
-    end.
-
-formatters(_Config) ->
-    ?assertEqual("88", erlperf:format_size(88)),
-    ?assertEqual("88000", erlperf:format_number(88000)),
-    ?assertEqual("881 Mb", erlperf:format_size(881 * 1024 * 1024)),
-    ?assertEqual("881 Mb", erlperf:format_size(881 * 1024 * 1024)),
-    ?assertEqual("123 Gb", erlperf:format_size(123 * 1024 * 1024 * 1024)),
-    % rounding
-    ?assertEqual("42", erlperf:format_number(42)),
-    ?assertEqual("432 Ki", erlperf:format_number(431992)),
-    ?assertEqual("333 Mi", erlperf:format_number(333000000)),
-    ?assertEqual("999 Gi", erlperf:format_number(998500431992)).
 
 %%--------------------------------------------------------------------
 %% record-replay
