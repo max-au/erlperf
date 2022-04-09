@@ -1,8 +1,11 @@
-%%% @author Maxim Fedorov, <maximfca@gmail.com>
+%%% @copyright (C) 2019-2022, Maxim Fedorov
 %%% @doc
-%%% Collects, accumulates &amp; filters cluster-wide metrics.
+%%% Collects, accumulates &amp; filters cluster-wide monitoring events.
+%%% Essentially a simple in-memory database for quick cluster overview.
+%%% Started only when the application is configured for running in a
+%%% primary node.
 %%% @end
--module(ep_cluster_history).
+-module(erlperf_history).
 -author("maximfca@gmail.com").
 
 -behaviour(gen_server).
@@ -22,8 +25,6 @@
     handle_info/2
 ]).
 
--include_lib("erlperf/include/monitor.hrl").
-
 -define(TABLE, ?MODULE).
 
 %%--------------------------------------------------------------------
@@ -37,14 +38,14 @@ start_link() ->
 %% @doc
 %% Returns cluster history from time From (all fields), sorted
 %%  by time.
--spec get(From :: integer()) -> [{node(), monitor_sample()}].
+-spec get(From :: integer()) -> [{node(), erlperf_monitor:monitor_sample()}].
 get(From) ->
     get(From, erlang:system_time(millisecond)).
 
 %% @doc
 %% Returns records between From and To (inclusive)
 %% Both From and To are Erlang system time in milliseconds.
--spec get(From :: integer(), To :: integer()) -> [{node(), monitor_sample()}].
+-spec get(From :: integer(), To :: integer()) -> [{node(), erlperf_monitor:monitor_sample()}].
 get(From, To) ->
     % ets:fun2ms(fun ({T, _} = R) when T =< To, T >= From -> R end =>
     %    [{{'$1','$2'},[{'=<','$1', To},{'>=','$1', From}],['$_']}]
@@ -67,40 +68,20 @@ get(From, To) ->
 %%%===================================================================
 %%% gen_server callbacks
 
-%% Suppress dialyzer warning for OTP compatibility: erlperf runs on OTP20
-%%  that does not support pg, and has pg2 instead.
--dialyzer({no_missing_calls, init/1}).
--compile({nowarn_deprecated_function, [{pg2, create, 1}, {pg2, join, 2}]}).
--compile({nowarn_removed, [{pg2, create, 1}, {pg2, join, 2}]}).
 init([]) ->
-    try
-        ok = pg:join(?HISTORY_PROCESS_GROUP, self())
-    catch
-        error:undef ->
-            ok = pg2:create(?HISTORY_PROCESS_GROUP),
-            ok = pg2:join(?HISTORY_PROCESS_GROUP, self())
-    end,
+    ok = pg:join(erlperf, cluster_monitor, self()),
     ?TABLE = ets:new(?TABLE, [protected, ordered_set, named_table]),
-    % initial fetch (subject to race condition)
-    Now = erlang:system_time(millisecond),
-    From = Now - ?DEFAULT_HISTORY_DURATION,
-    {Replies, _BadNodes} = gen_server:multi_call([node() | nodes()], history, {get, From, Now}, ?RPC_TIMEOUT),
-    % update ETS table with all responses
-    [ets:insert(?TABLE, {Time, {Node, Sample}}) || {Node, #monitor_sample{time = Time}= Sample} <- Replies],
     {ok, #state{}}.
 
 handle_call(_Request, _From, _State) ->
-    error(badarg).
+    erlang:error(notsup).
 
 handle_cast(_Request, _State) ->
-    error(badarg).
+    erlang:error(notsup).
 
-handle_info({Node, #monitor_sample{time = Time} = Sample}, State) ->
+handle_info({Node, #{time := Time} = Sample}, State) ->
     ets:insert(?TABLE, {Time, {Node, Sample}}),
-    {noreply, maybe_clean(State)};
-
-handle_info(_Info, _State) ->
-    error(badarg).
+    {noreply, maybe_clean(State)}.
 
 %%%===================================================================
 %%% Internal functions

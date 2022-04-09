@@ -1,18 +1,19 @@
 %%%-------------------------------------------------------------------
-%%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (C) 2019, Maxim Fedorov
+%%% @copyright (C) 2019-2022, Maxim Fedorov
 %%% @doc
 %%%   System monitor: scheduler, RAM, and benchmarks throughput
-%%%  sampled.
+%%%  samples.
 %%% @end
--module(ep_monitor).
+-module(erlperf_monitor).
 -author("maximfca@gmail.com").
 
 -behaviour(gen_server).
 
 %% API
 -export([
-    start_link/0
+    start/0,
+    start_link/0,
+    register/3
 ]).
 
 %% gen_server callbacks
@@ -20,27 +21,52 @@
     init/1,
     handle_call/3,
     handle_cast/2,
-    handle_info/2,
-    terminate/2
+    handle_info/2
 ]).
 
 
 -include_lib("kernel/include/logger.hrl").
 
--include("monitor.hrl").
-
--define(SERVER, ?MODULE).
-
 -define(DEFAULT_TICK_INTERVAL_MS, 1000).
 
+%% Monitoring sampling structure
+-type monitor_sample() :: #{
+    time => integer(),
+    sched_util => float(),
+    dcpu => float(),
+    dio => float(),
+    processes => integer(),
+    ports => integer(),
+    ets => integer(),
+    memory_total => non_neg_integer(),
+    memory_processes => non_neg_integer(),
+    memory_binary => non_neg_integer(),
+    memory_ets => non_neg_integer(),
+    jobs => [{Job :: pid(), Cycles :: non_neg_integer()}]
+}.
+
+-export_type([monitor_sample/0]).
 
 %%--------------------------------------------------------------------
 %% @doc
+%% Starts the server (unlinked, not supervised, used only for
+%%  isolated BEAM runs)
+-spec(start() -> {ok, Pid :: pid()} | {error, Reason :: term()}).
+start() ->
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []).
+
+%% @doc
 %% Starts the server
--spec(start_link() ->
-    {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
+-spec(start_link() -> {ok, Pid :: pid()} | {error, Reason :: term()}).
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+%% @doc
+%% Registers job to monitor (ignoring failures, as monitor may not be
+%%  running).
+-spec register(pid(), term(), non_neg_integer()) -> ok.
+register(Job, Handle, Initial) ->
+    gen_server:cast(?MODULE, {register, Job, Handle, Initial}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -48,7 +74,7 @@ start_link() ->
 %% System monitor state
 -record(state, {
     % bi-map of job processes to counters
-    jobs = [] :: [{pid(), CRef :: reference(), Prev :: integer()}],
+    jobs :: [{pid(), Handle :: erlperf_job:handle(), Prev :: integer()}]    ,
     % scheduler data saved from last call
     sched_data :: [{pos_integer(), integer(), integer()}],
     % number of normal schedulers
@@ -61,21 +87,18 @@ start_link() ->
 }).
 
 init([]) ->
-    % subscribe to job events
-    erlang:process_flag(trap_exit, true),
-    ep_event_handler:subscribe(?JOB_EVENT, job),
-    %
+    %% subscribe to jobs starting up
+    %% TODO: figure out if there is a way to find jobs after restart.
+    %% ask a supervisor? but not all jobs are supervised...
+    Jobs = [],
+    %% Jobs = [{Pid, erlperf_job:handle(Pid), 0} ||
+    %%        {_, Pid, _, _} <- try supervisor:which_children(erlperf_job_sup) catch exit:{noproc, _} -> [] end],
+    %% [monitor(process, Pid) || {Pid, _, _} <- Jobs],
+    %% enable scheduler utilisation calculation
     erlang:system_flag(scheduler_wall_time, true),
     Tick = ?DEFAULT_TICK_INTERVAL_MS,
-    % start timing right now, and try to align for the middle of the interval
-    %   to simplify collecting cluster-wide data
-    % or not? Let's decide later.
-    %Next = erlang:monotonic_time(millisecond) + Tick - erlang:system_time(millisecond) rem Tick + Tick div 2,
     Next = erlang:monotonic_time(millisecond) + Tick,
     erlang:start_timer(Next, self(), tick, [{abs, true}]),
-    %% TODO: is it possible to avoid hacking over supervisor here?
-    Jobs = [{Pid, ep_job:get_counters(Pid), 0} || {_, Pid, _, _} <- supervisor:which_children(ep_job_sup)],
-    % init done
     {ok, #state{
         tick = Tick,
         jobs = Jobs,
@@ -86,33 +109,17 @@ init([]) ->
     }.
 
 handle_call(_Request, _From, _State) ->
-    error(badarg).
+    erlang:error(notsup).
 
-handle_cast(_Request, _State) ->
-    error(badarg).
+handle_cast({register, Job, Handle, Initial}, #state{jobs = Jobs} = State) ->
+    monitor(process, Job),
+    {noreply, State#state{jobs = [{Job, Handle, Initial} | Jobs]}}.
 
-terminate(_Reason, _State) ->
-    ep_event_handler:unsubscribe(?JOB_EVENT, job).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-
-handle_info({job, {started, Pid, _Code, CRef}}, #state{jobs = Jobs} = State) ->
-    monitor(process, Pid),
-    % emit system event for anyone willing to record this (e.g. benchmark_store process)
-    {noreply, State#state{jobs = [{Pid, CRef, 0} | Jobs]}};
-
-handle_info({'DOWN', _MRef, process, Pid, Reason}, #state{jobs = Jobs} = State) ->
-    Reason =/= normal andalso Reason =/= shutdown andalso
-        ?LOG_NOTICE("Job ~p exited with ~p", [Pid, Reason]),
+handle_info({'DOWN', _MRef, process, Pid, _Reason}, #state{jobs = Jobs} = State) ->
     {noreply, State#state{jobs = lists:keydelete(Pid, 1, Jobs)}};
 
 handle_info({timeout, _, tick}, State) ->
-    {noreply, handle_tick(State)};
-
-handle_info(_Info, _State) ->
-    error(badarg).
+    {noreply, handle_tick(State)}.
 
 %%%===================================================================
 %%% Internal functions
@@ -122,26 +129,33 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
     {NU, DU, DioU} = fold_normal(Data, NewSched, Normal, Dcpu, 0, 0),
     % add benchmarking info
     {Jobs, UpdatedJobs} = lists:foldl(
-        fun ({Pid, CRef, Prev}, {J, Save}) ->
-            Cycles = atomics:get(CRef, 1),
-            {[{Pid, Cycles - Prev} | J], [{Pid, CRef, Cycles} | Save]}
+        fun ({Pid, Handle, Prev}, {J, Save}) ->
+            Cycles =
+                case erlperf_job:sample(Handle) of
+                    C when is_integer(C) -> C;
+                    undefined -> Prev %% job is stopped, race condition here
+                end,
+            {[{Pid, Cycles - Prev} | J], [{Pid, Handle, Cycles} | Save]}
         end, {[], []}, State#state.jobs),
     %
-    Sample = #monitor_sample{
-        time = erlang:system_time(millisecond),
-        memory_total = erlang:memory(total),
-        memory_processes = erlang:memory(processes),
-        memory_binary = erlang:memory(binary),
-        memory_ets = erlang:memory(ets),
-        sched_util = NU * 100,
-        dcpu = DU * 100,
-        dio = DioU * 100,
-        processes = erlang:system_info(process_count),
-        ports = erlang:system_info(port_count),
-        ets = erlang:system_info(ets_count),
-        jobs = Jobs},
-    % notify subscribers
-    gen_event:notify(?SYSTEM_EVENT, Sample),
+    Sample = #{
+        time => erlang:system_time(millisecond),
+        memory_total => erlang:memory(total),
+        memory_processes => erlang:memory(processes),
+        memory_binary => erlang:memory(binary),
+        memory_ets => erlang:memory(ets),
+        sched_util => NU * 100,
+        dcpu => DU * 100,
+        dio => DioU * 100,
+        processes => erlang:system_info(process_count),
+        ports => erlang:system_info(port_count),
+        ets => erlang:system_info(ets_count),
+        jobs => Jobs},
+    % notify local subscribers
+    [Pid ! Sample || Pid <- pg:get_members(erlperf, {erlperf_monitor, node()})],
+    % notify global subscribers
+    [Pid ! {node(), Sample} || Pid <- pg:get_members(erlperf, cluster_monitor)],
+    %%
     NextTick = State#state.next_tick + State#state.tick,
     erlang:start_timer(NextTick, self(), tick, [{abs, true}]),
     State#state{sched_data = NewSched, next_tick = NextTick, jobs = lists:reverse(UpdatedJobs)}.

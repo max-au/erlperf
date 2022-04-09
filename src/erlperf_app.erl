@@ -1,11 +1,9 @@
-%%%-------------------------------------------------------------------
-%%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (C) 2019, Maxim Fedorov
-%%%     Benchmarking application
+%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @doc
+%%% Continuous benchmarking application behaviour.
 %%% @end
-%%%-------------------------------------------------------------------
-
 -module(erlperf_app).
+-author("maximfca@gmail.com").
 
 -behaviour(application).
 
@@ -13,7 +11,8 @@
 
 -spec start(application:start_type(), term()) -> {ok, pid()}.
 start(_StartType, _StartArgs) ->
-    erlperf_sup:start_link().
+    {ok, Sup} = erlperf_sup:start_link(),
+    {ok, Sup}.
 
 -spec stop(term()) -> ok.
 stop(_State) ->
