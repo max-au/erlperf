@@ -96,9 +96,6 @@ runner_code_fun2(Config) when is_list(Config) ->
 runner_code_name2(Config) when is_list(Config) ->
     variants("baz(1, 1) -> timer:sleep(1), 1.", ?FUNCTION_NAME).
 
-variants() ->
-    [{doc, "Tests various representations of the code mapping to resulting Erlang"}].
-
 variants(Runner, ProcName) ->
     ProcStr = atom_to_list(ProcName),
     Sep = io_lib:format("~n    ", []),
@@ -164,8 +161,8 @@ measure_variant(Code) ->
         %% stop the job
         gen:stop(Job),
         is_map_key(done, Code) andalso receive done -> ok after 1000 -> throw({done, timeout}) end,
-        %% timer:sleep must be run between 20 and 51 times
-        ?assert(Sample > 10 andalso Sample < 51, {sample, Sample})
+        %% timer:sleep must be run between 5 and 51 times - very relaxed, but CIs are notoriously slow...
+        ?assert(Sample > 5 andalso Sample < 51, {sample, Sample})
     catch error:{generate, {What, Arity, requires, Dependency}} ->
         %% verify this combination is indeed invalid
         ?assertNot(is_map_key(Dependency, Code)),

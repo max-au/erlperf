@@ -18,12 +18,12 @@
 
    == TL; DR ==
 
-   Find out how many times per second a function can be run  (beware of shell escaping your code!):
+   Find out how many times per sample (second) a function can be run  (beware of shell escaping your code!):
 
    ```
-       $ ../erlperf 'rand:uniform().'
-       Code                    ||        QPS     Rel
-       rand:uniform().          1    9798 Ki    100%
+       $ ./erlperf 'rand:uniform().'
+       Code                    ||        QPS       Time
+       rand:uniform().          1   13942 Ki      71 ns
    '''
 
    Run four processes executing `rand:uniform()' in a tight loop, and see that code is indeed
@@ -31,17 +31,17 @@
 
    ```
        $ ./erlperf 'rand:uniform().' -c 4
-       Code                    ||        QPS     Rel
-       rand:uniform().          4   28596 Ki    100%
+       Code                    ||        QPS       Time
+       rand:uniform().          4   39489 Ki     100 ns
    '''
 
    Benchmark one function vs another, taking average of 10 seconds and skipping first second:
 
    ```
        $ ./erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1
-       Code                         Concurrency   Throughput   Relative
-       rand:uniform().                        1      4303 Ki       100%
-       crypto:strong_rand_bytes(2).           1      1485 Ki        35%
+       Code                                 ||        QPS       Time     Rel
+       rand:uniform().                       1   15073 Ki      66 ns    100%
+       crypto:strong_rand_bytes(2).          1    1136 Ki     880 ns      7%
    '''
 
    Run a function passing the state into the next iteration. This code demonstrates performance difference
@@ -63,33 +63,33 @@
 
    ```
        $ ./erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).' --squeeze
-       Code                           ||        QPS
-       code:is_loaded(local_udp).      1     614 Ki
+       Code                               ||        QPS       Time
+       code:is_loaded(local_udp).          5     927 Ki    5390 ns
    '''
 
    Start a server (`pg' scope in this example), use it in benchmark, and shut down after:
 
    ```
        $ ./erlperf 'pg:join(scope, group, self()), pg:leave(scope, group, self()).' --init 'pg:start_link(scope).' --done 'gen_server:stop(scope).'
-       Code                                                                   ||        QPS     Rel
-       pg:join(scope, group, self()), pg:leave(scope, group, self()).          1     321 Ki    100%
+       Code                                                                   ||        QPS       Time
+       pg:join(scope, group, self()), pg:leave(scope, group, self()).          1     336 Ki    2978 ns
    '''
 
    Run the same code with different arguments, returned from `init_runner' function:
 
    ```
        $ ./erlperf 'runner(X) -> timer:sleep(X).' --init_runner '1.' 'runner(X) -> timer:sleep(X).' --init_runner '2.'
-       Code                                 ||        QPS     Rel
-       runner(X) -> timer:sleep(X).          1        492    100%
-       runner(Y) -> timer:sleep(Y).          1        331     67%
+       Code                                 ||        QPS       Time     Rel
+       runner(X) -> timer:sleep(X).          1        498    2008 us    100%
+       runner(X) -> timer:sleep(X).          1        332    3012 us     66%
    '''
 
    Determine how many times a process can join/leave pg2 group on a single node:
 
    ```
        $ ./erlperf 'ok = pg2:join(g, self()), ok = pg2:leave(g, self()).' --init 'pg2:create(g).'
-       Code                                                         ||        QPS     Rel
-       ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1      64253    100%
+       Code                                                         ||        QPS       Time
+       ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1      64021   15619 ns
    '''
 
    Compare `pg' with `pg2' running two nodes (note the `-i' argument spawning an extra node to
@@ -97,9 +97,9 @@
 
    ```
        ./erlperf 'ok = pg2:join(g, self()), ok = pg2:leave(g, self()).' --init 'pg2:create(g).' 'ok = pg:join(g, self()), ok = pg:leave(g, self()).' --init 'pg:start(pg).' -i
-       Code                                                         ||        QPS     Rel
-       ok = pg:join(g, self()), ok = pg:leave(g, self()).            1     235 Ki    100%
-       ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1       1817      0%
+       Code                                                         ||        QPS       Time     Rel
+       ok = pg:join(g, self()), ok = pg:leave(g, self()).            1     241 Ki    4147 ns    100%
+       ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1       1415     707 us      0%
    '''
 
    Watch the progress of your test running (use -v option) with extra information: scheduler utilisation, dirty CPU &amp; IO
@@ -109,15 +109,15 @@
    ```
        $ ./erlperf 'rand:uniform().' -q -v
 
-       YYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS  <0.92.0>
-       2019-06-21T13:25:21-07:00  11.98   0.00   0.47       52        3      20  32451 Kb   4673 Kb    179 Kb    458 Kb    3761 Ki
-       2019-06-21T13:25:22-07:00  12.57   0.00   0.00       52        3      20  32702 Kb   4898 Kb    201 Kb    460 Kb    4343 Ki
+       YYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS   <0.80.0>
+       2022-04-08T22:42:55-07:00   3.03   0.00   0.32       42        3      20  30936 Kb   5114 Kb    185 Kb    423 Kb   13110 Ki
+       2022-04-08T22:42:56-07:00   3.24   0.00   0.00       42        3      20  31829 Kb   5575 Kb    211 Kb    424 Kb   15382 Ki
+       2022-04-08T22:42:57-07:00   3.14   0.00   0.00       42        3      20  32079 Kb   5849 Kb    211 Kb    424 Kb   15404 Ki
        <...>
-       2019-06-21T13:25:54-07:00 100.00   0.00   0.00       63        3      20  32839 Kb   4899 Kb    203 Kb    469 Kb   14296 Ki
-       2019-06-21T13:25:55-07:00 100.00   0.00   0.00       63        3      20  32814 Kb   4969 Kb    201 Kb    469 Kb   13810 Ki
-       2019-06-21T13:25:56-07:00 100.00   0.00   0.00       63        3      20  32809 Kb   4964 Kb    201 Kb    469 Kb   13074 Ki
-       Code                ||        QPS
-       rand:uniform().      8   14918 Ki
+       2022-04-08T22:43:29-07:00  37.50   0.00   0.00       53        3      20  32147 Kb   6469 Kb    212 Kb    424 Kb   49162 Ki
+       2022-04-08T22:43:30-07:00  37.50   0.00   0.00       53        3      20  32677 Kb   6643 Kb    212 Kb    424 Kb   50217 Ki
+       Code                    ||        QPS       Time
+       rand:uniform().          8   54372 Ki     144 ns
    '''
 
    Command-line benchmarking does not save results anywhere. It is designed to provide a quick answer to the question
@@ -145,15 +145,15 @@
    Use `-pa' argument to add extra code path. Example:
    ```
        $ ./erlperf 'argparse:parse([], #{}).' -pa _build/test/lib/argparse/ebin
-       Code                             ||        QPS     Rel
-       argparse:parse([], #{}).          1     859 Ki    100%
+       Code                             ||        QPS       Time
+       argparse:parse([], #{}).          1     955 Ki    1047 ns
    '''
 
    If you need to add multiple released applications, supply `ERL_LIBS' environment variable instead:
    ```
        $ ERL_LIBS="_build/test/lib" erlperf 'argparse:parse([], #{}).'
-       Code                             ||        QPS     Rel
-       argparse:parse([], #{}).          1     843 Ki    100%
+       Code                             ||        QPS       Time
+       argparse:parse([], #{}).          1     735 Ki    1361 ns
    '''
 
    === Usage in production ===
@@ -286,11 +286,11 @@
 
    ```
        $ ./erlperf 'rand:uniform().' -d 100 -s 20
-       Code                    ||        QPS     Rel
-       rand:uniform().          1     970 Ki    100%
+       Code                    ||        QPS       Time
+       rand:uniform().          1    1480 Ki      67 ns
        $ ./erlperf 'rand:uniform().' -d 200 -s 20
-       Code                    ||        QPS     Rel
-       rand:uniform().          1    1973 Ki    100%
+       Code                    ||        QPS       Time
+       rand:uniform().          1    2771 Ki      72 ns
    '''
 
    === Concurrency test (squeeze) ===

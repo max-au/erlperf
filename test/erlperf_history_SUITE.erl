@@ -38,6 +38,8 @@ monitor_cluster() ->
 %% TODO: remove piggy-backing
 
 monitor_cluster(Config) ->
+    Started = erlang:system_time(millisecond),
+
     {ok, AppSup} = erlperf_sup:start_link(),
     ?assertNotEqual(undefined, whereis(erlperf_monitor)),
     {ok, HistPid} = erlperf_history:start_link(),
@@ -55,7 +57,6 @@ monitor_cluster(Config) ->
     %% start 3rd cluster monitor printing to a file
     {ok, ClusterFilePid} = erlperf_cluster_monitor:start_link(LogFile, AllFields),
 
-    Started = erlang:system_time(millisecond),
     %% start a benchmark on the different node, and monitor progress
     %% link the process to kill it if timetrap fires
     Remote = spawn_link(
@@ -103,7 +104,9 @@ monitor_cluster(Config) ->
     ?assertNotEqual([], History),
     SmallHistory = [{N, maps:with(AllFields, Evt)} || {N, Evt} <- History],
     ?assertEqual([], Samples -- SmallHistory, {missing_events, Samples, SmallHistory}),
-    ?assertEqual([], SmallHistory -- Samples, {extra_events, SmallHistory, Samples}),
+    %% next line is commented out: the "small" history is actually the full history that
+    %%  may contain more events
+    %% ?assertEqual([], SmallHistory -- Samples, {extra_events, SmallHistory, Samples}),
 
     %% Samples from the local node must contain 2 jobs with non-zero count
     %% Remote samples have 1 job
