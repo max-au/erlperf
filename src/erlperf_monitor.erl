@@ -13,7 +13,8 @@
 -export([
     start/0,
     start_link/0,
-    register/3
+    register/3,
+    unregister/1
 ]).
 
 %% gen_server callbacks
@@ -68,13 +69,19 @@ start_link() ->
 register(Job, Handle, Initial) ->
     gen_server:cast(?MODULE, {register, Job, Handle, Initial}).
 
+%% @doc
+%% Removes the job from monitoring (e.g. job has no workers running)
+-spec unregister(pid()) -> ok.
+unregister(Job) ->
+    gen_server:cast(?MODULE, {unregister, Job}).
+
 %%%===================================================================
 %%% gen_server callbacks
 
 %% System monitor state
 -record(state, {
     % bi-map of job processes to counters
-    jobs :: [{pid(), Handle :: erlperf_job:handle(), Prev :: integer()}]    ,
+    jobs :: [{pid(), reference(), Handle :: erlperf_job:handle(), Prev :: integer()}]    ,
     % scheduler data saved from last call
     sched_data :: [{pos_integer(), integer(), integer()}],
     % number of normal schedulers
@@ -112,8 +119,16 @@ handle_call(_Request, _From, _State) ->
     erlang:error(notsup).
 
 handle_cast({register, Job, Handle, Initial}, #state{jobs = Jobs} = State) ->
-    monitor(process, Job),
-    {noreply, State#state{jobs = [{Job, Handle, Initial} | Jobs]}}.
+    MRef = monitor(process, Job),
+    {noreply, State#state{jobs = [{Job, MRef, Handle, Initial} | Jobs]}};
+handle_cast({unregister, Job}, #state{jobs = Jobs} = State) ->
+    case lists:keyfind(Job, 1, Jobs) of
+        {Job, MRef, _, _} ->
+            demonitor(MRef, [flush]),
+            {noreply, State#state{jobs = lists:keydelete(Job, 1, Jobs)}};
+        false ->
+            {noreply, State}
+    end.
 
 handle_info({'DOWN', _MRef, process, Pid, _Reason}, #state{jobs = Jobs} = State) ->
     {noreply, State#state{jobs = lists:keydelete(Pid, 1, Jobs)}};
@@ -129,13 +144,13 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
     {NU, DU, DioU} = fold_normal(Data, NewSched, Normal, Dcpu, 0, 0),
     % add benchmarking info
     {Jobs, UpdatedJobs} = lists:foldl(
-        fun ({Pid, Handle, Prev}, {J, Save}) ->
+        fun ({Pid, MRef, Handle, Prev}, {J, Save}) ->
             Cycles =
                 case erlperf_job:sample(Handle) of
                     C when is_integer(C) -> C;
                     undefined -> Prev %% job is stopped, race condition here
                 end,
-            {[{Pid, Cycles - Prev} | J], [{Pid, Handle, Cycles} | Save]}
+            {[{Pid, Cycles - Prev} | J], [{Pid, MRef, Handle, Cycles} | Save]}
         end, {[], []}, State#state.jobs),
     %
     Sample = #{

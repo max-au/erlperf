@@ -32,7 +32,7 @@
     % ignored when running concurrency test
     concurrency => pos_integer(),
     %% sampling interval: default is 1000 milliseconds (to measure QPS)
-    %% 'undefined' duration is used as a flag for low-overhead benchmarking
+    %% 'undefined' duration is used as a flag for timed benchmarking
     sample_duration => pos_integer() | undefined,
     %% warmup samples: first 'warmup' cycles are ignored (defaults to 0)
     warmup => non_neg_integer(),
@@ -187,7 +187,7 @@ start(Code, Concurrency) ->
     Job.
 
 %% @doc
-%% Low-overhead benchmarking, runs the code Count times and returns
+%% Timed benchmarking, runs the code Count times and returns
 %%  time in microseconds it took to execute the code.
 -spec time(code(), Count :: non_neg_integer()) -> TimeUs :: non_neg_integer().
 time(Code, Count) ->

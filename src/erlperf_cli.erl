@@ -29,7 +29,7 @@ main(Args) ->
                     end, ok})
             end,
 
-        %% low-overhead benchmarking is not compatible with many options, and may have "loop" written as 100M, 100K
+        %% timed benchmarking is not compatible with many options, and may have "loop" written as 100M, 100K
         %% TODO: implement mutually exclusive groups in argparse
         RunOpts =
             case maps:find(loop, RunOpts0) of
@@ -75,9 +75,11 @@ main(Args) ->
         error:{generic, Error} ->
             format(error, "Error: ~s~n", [Error]);
         error:{loop, Option} ->
-            format(error, "Low-overhead benchmarking is not compatible with ~s~n", [Option]);
+            format(error, "Timed benchmarking is not compatible with ~s~n", [Option]);
         error:{generate, {parse, FunName, Error}} ->
             format(error, "Parse error for ~s: ~s~n", [FunName, lists:flatten(Error)]);
+        error:{generate, {What, WhatArity, requires, Dep}} ->
+            format(error, "~s/~b requires ~s function defined~n", [What, WhatArity, Dep]);
         error:{compile, Errors, Warnings} ->
             Errors =/= [] andalso format(error, "Compile error: ~s~n", [compile_errors(Errors)]),
             Warnings =/= [] andalso format(warning, "Warning: ~s~n", [compile_errors(Warnings)]);
@@ -95,7 +97,7 @@ compile_errors([]) -> "";
 compile_errors([{_, []} | Tail]) ->
     compile_errors(Tail);
 compile_errors([{L, [{_Anno, Mod, Err} | T1]} | Tail]) ->
-    lists:flatten(Mod:format_error(Err)) ++ compile_errors([{L, T1} | Tail]).
+    lists:flatten(Mod:format_error(Err) ++ io_lib:format("~n", [])) ++ compile_errors([{L, T1} | Tail]).
 
 callable(Type, {Args, Acc}) ->
     {Args, merge_callable(Type, maps:get(Type, Args, []), Acc, [])}.
@@ -137,7 +139,7 @@ parse_loop(Loop) ->
         {Int, "K"} -> Int * 1000;
         {Int, []} -> Int;
         {Int, "G"} -> Int * 1000000000;
-        _Other -> erlang:error({generic, "unsupported syntax for low-overhead count: " ++ Loop})
+        _Other -> erlang:error({generic, "unsupported syntax for timed iteration count: " ++ Loop})
     end.
 
 arguments() ->
@@ -146,7 +148,7 @@ arguments() ->
         "Benchmark rand:uniform() vs crypto:strong_rand_bytes(2):\n    erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1\n"
         "Figure out concurrency limits:\n    erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).'\n"
         "Benchmark pg join/leave operations:\n    erlperf 'pg:join(s, foo, self()), pg:leave(s, foo, self()).' --init 'pg:start_link(s).'\n"
-        "Low-overhead benchmark for a single BIF:\n    erlperf 'erlang:unique_integer().' -l 1000000\n",
+        "Timed benchmark for a single BIF:\n    erlperf 'erlang:unique_integer().' -l 1000000\n",
         arguments => [
             #{name => concurrency, short => $c, long => "-concurrency",
                 help => "number of concurrently executed runner processes",
@@ -158,7 +160,7 @@ arguments() ->
                 help => "minimum number of samples to collect (3)",
                 type => {int, [{min, 1}]}},
             #{name => loop, short => $l, long => "-loop",
-                help => "low overhead mode count, e.g. 100K, 200M, 3G"},
+                help => "timed mode (lower overhead) iteration count: 50, 100K, 200M, 3G"},
             #{name => warmup, short => $w, long => "-warmup",
                 help => "number of samples to skip (0)",
                 type => {int, [{min, 0}]}},
@@ -245,7 +247,7 @@ run_main(#{loop := Loop}, #{}, Codes) ->
 run_main(RunOpts, SqueezeOps, [Code]) when map_size(SqueezeOps) > 0 ->
     Duration = maps:get(sample_duration, RunOpts, 1000),
     {QPS, Con} = erlperf:run(Code, RunOpts, SqueezeOps),
-    Timing = Duration * 1000000 div QPS * Con,
+    Timing = if QPS =:=0 -> infinity; true -> Duration * 1000000 div QPS * Con end,
     format_result([Code], Con, [QPS], [Timing]);
 
 %% benchmark: don't print "Relative" column for a single sample
@@ -261,7 +263,7 @@ run_main(RunOpts, _, Execs) ->
     Concurrency = maps:get(concurrency, RunOpts, 1),
     Duration = maps:get(sample_duration, RunOpts, 1000),
     Throughput = erlperf:benchmark(Execs, RunOpts, undefined),
-    Timings = [Duration * 1000000 div T * Concurrency || T <- Throughput],
+    Timings = [if T =:= 0 -> infinity; true -> Duration * 1000000 div T * Concurrency end || T <- Throughput],
     format_result(Execs, Concurrency, Throughput, Timings).
 
 format_result(Execs, Concurrency, Throughput, Timings) ->
