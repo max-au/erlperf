@@ -269,7 +269,7 @@ run_main(RunOpts, _, Execs) ->
 format_result(Execs, Concurrency, Throughput, Timings) ->
     MaxQPS = lists:max(Throughput),
     Codes = [maps:get(runner, Code) || Code <- Execs],
-    Zipped = lists:keysort(3, lists:zip3(Codes, Throughput, Timings)),
+    Zipped = lists:reverse(lists:keysort(2, lists:zip3(Codes, Throughput, Timings))),
     %% Columns: Code | Concurrency | Throughput | Time | Relative
     %% Code takes all the remaining width.
     MaxColumns = case io:columns() of {ok, C} -> C; _ -> 80 end,
