@@ -127,7 +127,9 @@ format_number(Num) ->
 
 %% @doc Formats time duration, from nanoseconds to seconds
 %%  Example: 88 -> 88 ns, 88000 -> 88 us, 10000000 -> 10 ms
--spec format_duration(non_neg_integer()) -> string().
+-spec format_duration(non_neg_integer() | infinity) -> string().
+format_duration(infinity) ->
+    "inf";
 format_duration(Num) when Num > 100000000000 ->
     integer_to_list(round(Num / 1000000000)) ++ " s";
 format_duration(Num) when Num > 100000000 ->

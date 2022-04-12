@@ -118,8 +118,8 @@ When there are multiple jobs, multiple columns are printed.
 Command-line benchmarking does not save results anywhere. It is designed to provide a quick answer to the question
 "is that piece of code faster".
 
-## Minimal overhead mode
-Since 2.0, `erlperf` includes "low overhead" mode. It cannot be used for continuous benchmarking. In this mode
+## Timed (low overhead) mode
+Since 2.0, `erlperf` includes timed mode. It cannot be used for continuous benchmarking. In this mode
 runner code is executed specified amount of times in a tight loop:
 
 ```bash
@@ -130,7 +130,7 @@ runner code is executed specified amount of times in a tight loop:
 ```
 
 This mode effectively runs following code: `loop(0) -> ok; loop(Count) -> rand:uniform(), loop(Count - 1).`
-Continuous mode adds 1-2 ns to each iteration.
+Timed mode reduced benchmarking overhead (compared to continuous mode) by 1-2 ns per iteration.
 
 # Benchmarking existing application
 `erlperf` can be used to measure performance of your application running in production, or code that is stored
@@ -319,7 +319,7 @@ two times faster than applying a function, and 20 times faster than repeatedly c
 the same invocation method to get a relevant result.
 
 Absolute benchmarking overhead may be significant for very fast functions taking just a few nanoseconds.
-Use "low overhead mode" for such occasions.
+Use timed mode for such occasions.
 
 ## Experimental: recording call chain
 This experimental feature allows capturing a sequence of calls as a list of
@@ -404,7 +404,7 @@ Number of `run/0` calls per second is reported as throughput. Before 2.0, `erlpe
 used `atomics` to maintain a counter shared between all runner processes, introducing
 unnecessary BIF call overhead. 
 
-Low-overhead mode tightens it even further, turning runner into this function:
+Timed (low-overhead) mode tightens it even further, turning runner into this function:
 ```erlang
 runner(0) ->
     ok;

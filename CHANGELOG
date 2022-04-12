@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.1
+- minor bugfixes (friendlier error reporting)
+
 ## 2.0
 - incompatible change: `erlperf` requires runner arity to be defined explicitly.
   Code example: `erlperf:run(#{runner => {timer, sleep, []}, init_runner => "1."})`,
