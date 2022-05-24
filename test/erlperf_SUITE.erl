@@ -30,10 +30,11 @@
 
 -export([
     cmd_line_simple/1, cmd_line_verbose/1, cmd_line_compare/1,
-    cmd_line_squeeze/1, cmd_line_usage/1, cmd_line_init/1,
+    cmd_line_usage/1, cmd_line_init/1,
     cmd_line_double/1, cmd_line_triple/1, cmd_line_pg/1, cmd_line_mfa/1,
     cmd_line_recorded/1,
-    cmd_line_squeeze/0
+    cmd_line_squeeze/0, cmd_line_squeeze/1,
+    cmd_line_all/0, cmd_line_all/1
 ]).
 
 -export([mfa_squeeze/0, mfa_squeeze/1, replay/1, do_anything/1]).
@@ -80,7 +81,8 @@ groups() ->
             cmd_line_triple,
             cmd_line_pg,
             cmd_line_mfa,
-            cmd_line_recorded
+            cmd_line_recorded,
+            cmd_line_all
         ]},
         {squeeze, [], [
             mfa_squeeze
@@ -452,6 +454,30 @@ cmd_line_recorded(Config) ->
     ?assertEqual(["Code", "||", "QPS", "Time"], string:lexemes(LN1, " ")),
     ?assertMatch(["[{ets,insert,[test_ets_tab,{100,40}]},", "...]", "1" | _], string:lexemes(LN2, " ")),
     ok.
+
+cmd_line_all() ->
+    [{doc, "Test init_all, done_all, init_runner_all options "}].
+
+%% ./erlperf 'runner(X)->timer:sleep(X).' 'runner(X)->timer:sleep(X).' 'runner(X)->timer:sleep(X).'
+%%      --init_all '5.' --init '1.' --init_runner_all 'ir(Z) -> Z * 2.' --init_runner '5.' --init_runner '2.' --done_all '2.'
+cmd_line_all(Config) when is_list(Config) ->
+    Code = "runner(X)->timer:sleep(X).",
+    Code2 = "runner(Y)->timer:sleep(Y).",
+    %% how this test works:
+    %%  --init_all returns 5 for all 3 tests, for code#1 --init is overridden to be 1.
+    %%  --init_runner_all returns 2x of init result, but there is override for #1 and #2 returning 5 and 2
+    %%  resulting delays are 5, 2 and 10.
+    Out = capture_io(fun () -> erlperf_cli:main(
+        [Code, Code2, Code, "--init_all", "5.", "--init", "1.", "--init_runner_all", "ir(Z) -> Z * 2.",
+            "--init_runner", "5.", "--init_runner", "2.",
+            "--done_all", "2.", "-s", "2", "--duration", "100"]) end), %% unrelated parts to make the test quicker
+    [{Code2, 1, C1, _, R}, {Code, 1, C2, _, R2}, {Code, 1, C3, _, R3}] = parse_out(Out),
+    %% tests sorting as well
+    ?assert(C1 > 25 andalso C1 < 55, {qps, C1}), %% 2 ms delay
+    ?assert(C2 > 10 andalso C2 < 25, {qps, C2}), %% 5 ms delay
+    ?assert(C3 > 5 andalso C3 < 11, {qps, C3}), %% 10 ms delay
+    ?assert(R > R2), %% 5 ms delay is less than 2 ms
+    ?assert(R2 > R3). %% 5 ms delay is more than 10 ms
 
 %%--------------------------------------------------------------------
 %% record-replay

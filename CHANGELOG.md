@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.2
+- added convenience command line options: init_all, done_all, init_runner_all
+
 ## 2.0.1
 - minor bugfixes (friendlier error reporting)
 

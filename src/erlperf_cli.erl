@@ -47,7 +47,8 @@ main(Args) ->
         %% find all runners
         Code0 = [parse_code(C) || C <- maps:get(code, RunOpts)],
         %% find associated init, init_runner, done
-        {_, Code} = lists:foldl(fun callable/2, {RunOpts, Code0}, [init, init_runner, done]),
+        {_, Code} = lists:foldl(fun callable/2, {RunOpts, Code0},
+            [{init, init_all}, {init_runner, init_runner_all}, {done, done_all}]),
         %% figure out whether concurrency run is requested
         COpts = case maps:find(squeeze, RunOpts) of
                     {ok, true} ->
@@ -99,8 +100,24 @@ compile_errors([{_, []} | Tail]) ->
 compile_errors([{L, [{_Anno, Mod, Err} | T1]} | Tail]) ->
     lists:flatten(Mod:format_error(Err) ++ io_lib:format("~n", [])) ++ compile_errors([{L, T1} | Tail]).
 
-callable(Type, {Args, Acc}) ->
-    {Args, merge_callable(Type, maps:get(Type, Args, []), Acc, [])}.
+callable({Type, Default}, {Args, Acc}) ->
+    case maps:find(Type, Args) of
+        error when is_map_key(Default, Args) ->
+            %% default is set, no overrides
+            {Args, merge_callable(Type, lists:duplicate(length(Acc), [maps:get(Default, Args)]), Acc, [])};
+        error ->
+            %% no overrides, no default - most common case
+            {Args, merge_callable(Type, [], Acc, [])};
+        {ok, Overrides} when is_map_key(Default, Args) ->
+            %% some overrides, and the default as well
+            %% extend the Overrides array to expected size by adding default value
+            Def = [maps:get(Default, Args)],
+            Complete = Overrides ++ [Def || _ <- lists:seq(1, length(Acc) - length(Overrides))],
+            {Args, merge_callable(Type, Complete, Acc, [])};
+        {ok, NoDefault} ->
+            %% no default, but some arguments are defined
+            {Args, merge_callable(Type, NoDefault, Acc, [])}
+    end.
 
 merge_callable(_Type, [], Acc, Merged) ->
     lists:reverse(Merged) ++ Acc;
@@ -190,6 +207,12 @@ arguments() ->
                 help => "done code", nargs => 1, action => append},
             #{name => init_runner, long => "-init_runner",
                 help => "init_runner code", nargs => 1, action => append},
+            #{name => init_all, long => "-init_all",
+                help => "default init code for all runners"},
+            #{name => done_all, long => "-done_all",
+                help => "default done code for all runners"},
+            #{name => init_runner_all, long => "-init_runner_all",
+                help => "default init_runner code for all runners"},
             #{name => code,
                 help => "code to test", nargs => nonempty_list, action => extend}
         ]}.
