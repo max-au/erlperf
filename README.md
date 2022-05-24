@@ -1,10 +1,11 @@
-erlperf
-=====
+# erlperf
+
+[![Build Status](https://github.com/max-au/erlperf/actions/workflows/erlang.yml/badge.svg?branch=master)](https://github.com/max-au/erlperf/actions) [![Hex.pm](https://img.shields.io/hexpm/v/erlperf.svg)](https://hex.pm/packages/erlperf) [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/erlperf)
 
 Erlang Performance & Benchmarking Suite.
 Simple way to say "this code is faster than that one".
 
-Build:
+Build (tested with OTP 23, 24, 25):
 
 ```bash
     $ rebar3 as prod escriptize
