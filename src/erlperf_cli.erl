@@ -7,7 +7,8 @@
 
 %% Public API: escript
 -export([
-    main/1
+    main/1,
+    main_impl/3
 ]).
 
 %% @doc Simple command-line benchmarking interface.
@@ -316,6 +317,10 @@ format_code(Code) when is_tuple(Code) ->
     lists:flatten(io_lib:format("~tp", [Code]));
 format_code(Code) when is_tuple(hd(Code)) ->
     lists:flatten(io_lib:format("[~tp, ...]", [hd(Code)]));
+format_code(Code) when is_function(Code) ->
+    {module, _Mod} = erlang:fun_info(Code, module),
+    {name, Name} = erlang:fun_info(Code, name),
+    lists:flatten(io_lib:format("~tp:~tp", [escript, Name]));
 format_code(Code) ->
     Code.
 
