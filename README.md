@@ -289,6 +289,17 @@ halved:
     rand:uniform().          1    2771 Ki      72 ns
 ```
 
+## Benchmarking under lock contention
+ERTS cannot guarantee precise timing when there is severe lock contention happening,
+and scheduler utilisation is 100%. This often happens with ETS:
+```bash
+    $ ./erlperf -c 50 'ets:insert(ac_tab, {1, 2}).'
+```
+Running 50 concurrent processes trying to overwrite the very same key of an ETS
+table leads to lock contention on a shared resource (ETS table/bucket lock).
+
+
+
 ## Concurrency test (squeeze)
 Sometimes it's necessary to measure code running multiple concurrent
 processes, and find out when it saturates the node. It can be used to

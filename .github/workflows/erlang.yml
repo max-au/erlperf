@@ -11,16 +11,17 @@ jobs:
   linux:
     name: Test on OTP ${{ matrix.otp_version }} and ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+
     strategy:
       matrix:
-        otp_version: ['23', '24', '25']
+        otp_version: [23, 24, 25]
         os: [ubuntu-latest]
+
+    container:
+      image: erlang:${{ matrix.otp_version }}
+
     steps:
       - uses: actions/checkout@v2
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{matrix.otp_version}}
-          rebar3-version: '3.17.0'
       - name: Run tests
         run: rebar3 ct
       - name: Generate documentation

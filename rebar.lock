@@ -1,8 +1,8 @@
 {"1.2.0",
-[{<<"argparse">>,{pkg,<<"argparse">>,<<"1.2.3">>},0}]}.
+[{<<"argparse">>,{pkg,<<"argparse">>,<<"1.2.4">>},0}]}.
 [
 {pkg_hash,[
- {<<"argparse">>, <<"20578A5D86250D7FB1BF6D116054BF707C247395E740BC8FC1384CC49DFB06F7">>}]},
+ {<<"argparse">>, <<"A31E7C5D9F8814AFCD9B42C1B98C21DA6F851F93F2C8C00C107F6201668A0A7D">>}]},
 {pkg_hash_ext,[
- {<<"argparse">>, <<"BFE94654811112FB86880C47B3600313D8D2281A1CCE4DADA2B09E5C3C9988D3">>}]}
+ {<<"argparse">>, <<"AC6FDB7183EA20ADEB7EB66E34B21F2E8C4C6925913EE0C0765D339D97009FFE">>}]}
 ].

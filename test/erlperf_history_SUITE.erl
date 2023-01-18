@@ -1,4 +1,4 @@
-%%% @copyright (c) 2019-2022 Maxim Fedorov
+%%% @copyright (c) 2019-2023 Maxim Fedorov
 %%% @doc
 %%% Tests combination of erlperf_monitor, erlperf_cluster_monitor,
 %%%  erlperf_history and erlperf_job. This is an integration test

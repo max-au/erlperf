@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%%   Application API. Benchmark/squeeze implementation.
 %%% @end
@@ -43,6 +43,11 @@
     %% experimental feature allowing to benchmark processes with
     %%  wildly jumping throughput
     cv => float(),
+    %% sets the supervising process priority. Default is 'high',
+    %% allowing test runner to be scheduled even under high scheduler
+    %% utilisation (which is expected for a benchmark running many
+    %% concurrent processes)
+    priority => erlang:priority_level(),
     %% report form for single benchmark: when set to 'extended',
     %%  all non-warmup samples are returned as a list.
     %% When missing, only the average QPS is returned.
@@ -113,12 +118,16 @@ benchmark(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
 
 %% no isolation requested, do normal in-BEAM test
 benchmark(Codes, Options, ConOpts) ->
-    {Jobs, Samples, Monitors} = start_jobs(Codes, []),
+    %% elevate priority to reduce timer skew
+    SetPrio = maps:get(priority, Options, high),
+    PrevPriority = process_flag(priority, SetPrio),
+    Jobs = start_jobs(Codes, []),
+    {JobPids, Samples, _} = lists:unzip3(Jobs),
     try
-        benchmark(Jobs, Options, ConOpts, Samples)
+        benchmark(JobPids, Options, ConOpts, Samples)
     after
-        [erlang:demonitor(Mon, [flush]) || Mon <- Monitors],
-        [(catch gen:stop(Pid)) || Pid <- Jobs]
+        stop_jobs(Jobs),
+        process_flag(priority, PrevPriority)
     end.
 
 %% @doc
@@ -249,7 +258,7 @@ stop_nodes(Peers, _Nodes) ->
     [peer:stop(Peer) || Peer <- Peers].
 
 start_jobs([], Jobs) ->
-    lists:unzip3(lists:reverse(Jobs));
+    lists:reverse(Jobs);
 start_jobs([Code | Codes], Jobs) ->
     try
         {ok, Pid} = erlperf_job:start(Code),
@@ -258,9 +267,17 @@ start_jobs([Code | Codes], Jobs) ->
         start_jobs(Codes, [{Pid, Sample, MonRef} | Jobs])
     catch Class:Reason:Stack ->
         %% stop jobs that were started
-        [(catch gen:stop(Pid)) || {Pid, _, _} <- Jobs],
+        stop_jobs(Jobs),
         erlang:raise(Class, Reason, Stack)
     end.
+
+stop_jobs(Jobs) ->
+    %% do not use gen:stop/1,2 or sys:terminate/2,3 here, as they spawn process running
+    %%  with normal priority, and they don't get scheduled fast enough when there is severe
+    %%  lock contention
+    WaitFor = [begin erlperf_job:request_stop(Pid), {Pid, Mon} end || {Pid, _, Mon} <- Jobs, is_process_alive(Pid)],
+    %% now wait for all monitors to fire
+    [receive {'DOWN', Mon, process, Pid, _R} -> ok end || {Pid, Mon} <- WaitFor].
 
 -define(DEFAULT_SAMPLE_DURATION, 1000).
 
@@ -291,19 +308,34 @@ benchmark(Jobs, Options, ConOpts, Handles) ->
 %%  * (optional) for the last 'samples' cycles coefficient of variation did not exceed 'cv'
 perform_benchmark(Jobs, Handles, Options) ->
     Interval = maps:get(sample_duration, Options, ?DEFAULT_SAMPLE_DURATION),
-    % sleep for "warmup * sample_duration"
-    timer:sleep(Interval * maps:get(warmup, Options, 0)),
-    % do at least 'samples' cycles
+    % warmup: intended to figure out sleep method (whether to apply busy_wait immediately)
+    NowTime = os:system_time(millisecond),
+    SleepMethod = warmup(maps:get(warmup, Options, 0), NowTime, NowTime + Interval, Interval, sleep),
+    % find all options - or take their defaults, TODO: maybe do that at a higher level?
+    JobMap = maps:from_list([{J, []} || J <- Jobs]),
+    CV = maps:get(cv, Options, undefined),
+    SampleCount = maps:get(samples, Options, 3),
+    Report = maps:get(report, Options, false),
+    % remember initial counters in Before
+    StartedAt = os:system_time(millisecond),
     Before = [[erlperf_job:sample(Handle)] || Handle <- Handles],
-    JobMap = maps:from_list([{J, []} || J <- Jobs]), %%
-    Samples = measure_impl(JobMap, Before, Handles, Interval,
-        maps:get(samples, Options, 3), maps:get(cv, Options, undefined)),
-    report_benchmark(Samples, maps:get(report, Options, false)).
+    Samples = measure_impl(JobMap, Before, Handles, StartedAt, StartedAt + Interval, Interval,
+        SleepMethod, SampleCount, CV),
+    report_benchmark(Samples, Report).
 
-measure_impl(_Jobs, Before, _Handles, _Interval, 0, undefined) ->
+%% warmup procedure: figure out if sleep/4 can work without falling back to busy wait
+warmup(0, _LastSampleTime, _NextSampleTime, _Interval, Method) ->
+    Method;
+warmup(Count, LastSampleTime, NextSampleTime, Interval, Method) ->
+    SleepFor = NextSampleTime - LastSampleTime,
+    NextMethod = sleep(Method, SleepFor, NextSampleTime, #{}),
+    NowTime = os:system_time(millisecond),
+    warmup(Count - 1, NowTime, NextSampleTime + Interval, Interval, NextMethod).
+
+measure_impl(_Jobs, Before, _Handles, _LastSampleTime, _NextSampleTime, _Interval, _SleepMethod, 0, undefined) ->
     normalise(Before);
 
-measure_impl(Jobs, Before, Handles, Interval, 0, CV) ->
+measure_impl(Jobs, Before, Handles, LastSampleTime, NextSampleTime, Interval, SleepMethod, 0, CV) ->
     %% Complication: some jobs may need a long time to stabilise compared to others.
     %% Decision: wait for all jobs to stabilise (could wait for just one?)
     case
@@ -323,18 +355,52 @@ measure_impl(Jobs, Before, Handles, Interval, 0, CV) ->
         true ->
             % imitate queue - drop last sample, push another in the head
             TailLess = [lists:droplast(L) || L <- Before],
-            measure_impl(Jobs, TailLess, Handles, Interval, 1, CV)
+            measure_impl(Jobs, TailLess, Handles, LastSampleTime, NextSampleTime + Interval,
+                Interval, SleepMethod, 1, CV)
     end;
 
-measure_impl(Jobs, Before, Handles, Interval, Count, CV) ->
+%% LastSampleTime: system time of the last sample
+%% NextSampleTime: system time when to take the next sample
+%% Interval: to calculate the next NextSampleTime
+%% Count: how many more samples to take
+%% CV: coefficient of variation
+measure_impl(Jobs, Before, Handles, LastSampleTime, NextSampleTime, Interval, SleepMethod, Count, CV) ->
+    SleepFor = NextSampleTime - LastSampleTime,
+    NextSleepMethod = sleep(SleepMethod, SleepFor, NextSampleTime, Jobs),
+    NowTime = os:system_time(millisecond),
+    Counts = [erlperf_job:sample(Handle) || Handle <- Handles],
+    measure_impl(Jobs, merge(Counts, Before), Handles, NowTime, NextSampleTime + Interval, Interval,
+        NextSleepMethod, Count - 1, CV).
+
+%% ERTS real-time properties are easily broken by lock contention (e.g. ETS misuse)
+%% When it happens, even the 'max' priority process may not run for an extended
+%% period of time.
+
+sleep(sleep, SleepFor, _WaitUntil, Jobs) when SleepFor > 0 ->
     receive
         {'DOWN', _Ref, process, Pid, Reason} when is_map_key(Pid, Jobs) ->
             erlang:error({benchmark, {'EXIT', Pid, Reason}})
-    after Interval->
-        ok
-    end,
-    Counts = [erlperf_job:sample(Handle) || Handle <- Handles],
-    measure_impl(Jobs, merge(Counts, Before), Handles, Interval, Count - 1, CV).
+    after SleepFor ->
+        sleep
+    end;
+sleep(_Mode, _SleepFor, WaitUntil, Jobs) ->
+    busy_wait(WaitUntil, Jobs).
+
+%% When sleep detects significant difference in the actual sleep time vs. expected,
+%% loop is switched to the busy wait.
+%% Once switched to busy wait, erlperf stays there until the end of the test.
+busy_wait(WaitUntil, Jobs) ->
+    receive
+        {'DOWN', _Ref, process, Pid, Reason} when is_map_key(Pid, Jobs) ->
+            erlang:error({benchmark, {'EXIT', Pid, Reason}})
+    after 0 ->
+        case os:system_time(millisecond) of
+            Now when Now > WaitUntil ->
+                busy_wait;
+            _ ->
+                busy_wait(WaitUntil, Jobs)
+        end
+    end.
 
 merge([], []) ->
     [];

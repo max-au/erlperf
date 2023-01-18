@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (c) 2019-2022 Maxim Fedorov
+%%% @copyright (c) 2019-2023 Maxim Fedorov
 %%% @doc
 %%%     Tests monitor
 %%% @end

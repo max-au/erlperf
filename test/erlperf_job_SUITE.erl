@@ -1,4 +1,4 @@
-%%% @copyright (c) 2019-2022 Maxim Fedorov
+%%% @copyright (c) 2019-2023 Maxim Fedorov
 %%% @doc
 %%% Tests all combinations of code maps accepted by erlperf_job
 %%% @end
@@ -47,10 +47,12 @@ overhead(Config) when is_list(Config) ->
     %% special case: code with no init/state/MFA/fun/... can be optimised
     %%  to a simple "for-loop" and get executed with the lease overhead
     {ok, Job} = erlperf_job:start_link(#{runner => "rand:uniform(1000)."}),
+    high = erlperf_job:set_priority(Job, max),
     Sampler = erlperf_job:handle(Job),
     TimeUs = erlperf_job:measure(Job, SampleCount),
     %% measure the same thing now with continuous benchmark
     ok = erlperf_job:set_concurrency(Job, 1),
+    {priority, max} = erlang:process_info(Job, priority),
     %% fetch a sample
     Start = erlperf_job:sample(Sampler),
     timer:sleep(1000),
