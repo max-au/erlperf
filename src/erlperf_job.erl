@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%% Job runner, taking care of init/done, workers added and removed.
 %%% Works just like a simple_one_for_one supervisor (children are
@@ -31,12 +31,14 @@
 -export([
     start/1,
     start_link/1,
+    request_stop/1,
     concurrency/1,
     set_concurrency/2,
     measure/2,
     sample/1,
     handle/1,
-    source/1
+    source/1,
+    set_priority/2
 ]).
 
 %% gen_server callbacks
@@ -90,16 +92,24 @@ start_link(#{runner := _MustHave} = Code) ->
     gen_server:start_link(?MODULE, generate(Code), []).
 
 %% @doc
+%% Requests this job to stop. Caller should monitor the job process
+%% to find our when the job has actually stopped.
+-spec request_stop(server_ref()) -> ok.
+request_stop(JobId) ->
+    gen_server:cast(JobId, stop).
+
+%% @doc
 -spec concurrency(server_ref()) -> Concurrency :: non_neg_integer().
 concurrency(JobId) ->
     gen_server:call(JobId, concurrency).
 
 %% @doc
 %% Change concurrency setting for this job.
-%% Does not reset counting.
+%% Does not reset counting. May never return if init_runner
+%% does not return.
 -spec set_concurrency(server_ref(), non_neg_integer()) -> ok.
 set_concurrency(JobId, Concurrency) ->
-    gen_server:call(JobId, {set_concurrency, Concurrency}).
+    gen_server:call(JobId, {set_concurrency, Concurrency}, infinity).
 
 %% @doc
 %% Executes the runner SampleCount times, returns time in microseconds it
@@ -129,6 +139,16 @@ sample({Module, Arity}) ->
 source(JobId) ->
     gen_server:call(JobId, source).
 
+%% @doc
+%% Sets job process priority when there are workers running.
+%% Worker processes may utilise all schedulers, making job
+%%  process to lose control over starting and stopping workers.
+%% By default, job process sets 'high' priority when there are
+%%  any workers running.
+%% Returns the previous setting.
+-spec set_priority(server_ref(), erlang:priority_level()) -> erlang:priority_level().
+set_priority(JobId, Priority) ->
+    gen_server:call(JobId, {priority, Priority}).
 
 %%--------------------------------------------------------------------
 %% Internal definitions
@@ -156,7 +176,11 @@ source(JobId) ->
     %% continuous workers
     workers = [] :: [pid()],
     %% temporary workers (for sample_count call)
-    sample_workers = #{} :: #{pid() => {pid(), reference()}}
+    sample_workers = #{} :: #{pid() => {pid(), reference()}},
+    %% priority to return to when no workers left
+    initial_priority :: erlang:priority_level(),
+    %% priority to set when workers are running
+    priority = high :: erlang:priority_level()
 }).
 
 -type state() :: #erlperf_job_state{}.
@@ -182,7 +206,8 @@ init(#exec{name = Mod, binary = Bin, init = Init, runner = {_Fun, Arity}} = Exec
     ok = erlperf_monitor:register(self(), {Mod, Arity}, 0),
     %% start tracing this module runner function
     1 = erlang:trace_pattern({Mod, Mod, Arity}, true, [local, call_count]),
-    {ok, #erlperf_job_state{exec = Exec, init_result = InitRet}}.
+    {priority, Prio} = erlang:process_info(self(), priority),
+    {ok, #erlperf_job_state{exec = Exec, init_result = InitRet, initial_priority = Prio}}.
 
 -spec handle_call(term(), {pid(), reference()}, state()) -> {reply, term(), state()}.
 handle_call(handle, _From, #erlperf_job_state{exec = #exec{name = Name, runner = {_Fun, Arity}}} = State) ->
@@ -203,11 +228,14 @@ handle_call({measure, _SampleCount}, _From, #erlperf_job_state{} = State) ->
 handle_call(source, _From, #erlperf_job_state{exec = #exec{source = Source}} = State) ->
     {reply, Source, State};
 
+handle_call({priority, Prio}, _From, #erlperf_job_state{priority = Old} = State) ->
+    {reply, Old, State#erlperf_job_state{priority = Prio}};
+
 handle_call({set_concurrency, Concurrency}, _From, #erlperf_job_state{workers = Workers} = State) ->
     {reply, ok, State#erlperf_job_state{workers = set_concurrency_impl(length(Workers), Concurrency, State)}}.
 
-handle_cast(_Request, _State) ->
-    error(notsup).
+handle_cast(stop, State) ->
+    {stop, normal, State}.
 
 -spec handle_info(term(), state()) -> {noreply, state()}.
 handle_info({'EXIT', SampleWorker, Reason},
@@ -254,19 +282,26 @@ start_sample_count(SampleCount, ReplyTo, InitRunner, InitRet, {SampleRunner, _})
     ),
     #{Child => ReplyTo}.
 
-set_concurrency_impl(OldConcurrency, Concurrency, #erlperf_job_state{workers = Workers, init_result = IR, exec = Exec}) ->
+set_concurrency_impl(OldConcurrency, Concurrency, #erlperf_job_state{workers = Workers, init_result = IR, exec = Exec,
+    priority = Prio, initial_priority = InitialPrio}) ->
     case Concurrency - OldConcurrency of
         0 ->
             Workers;
         NeedMore when NeedMore > 0 ->
+            %% this process must run with higher priority to avoid being de-scheduled by runners
+            OldConcurrency =:= 0 andalso erlang:process_flag(priority, Prio),
             Workers ++ add_workers(NeedMore, Exec, IR, []);
         NeedLess ->
-            remove_workers(NeedLess, Workers)
+            {Fire, Keep} = lists:split(-NeedLess, Workers),
+            stop_workers(Fire),
+            Keep =:= [] andalso erlang:process_flag(priority, InitialPrio),
+            Keep
     end.
 
 add_workers(0, _ExecMap, _InitRet, NewWorkers) ->
     %% ensure all new workers completed their InitRunner routine
     [receive {Worker, init_runner} -> ok end || Worker <- NewWorkers],
+    [Worker ! go || Worker <- NewWorkers],
     NewWorkers;
 add_workers(More, #exec{init_runner = InitRunner, runner = {Runner, _RunnerArity}} = Exec, InitRet, NewWorkers) ->
     Control = self(),
@@ -275,18 +310,15 @@ add_workers(More, #exec{init_runner = InitRunner, runner = {Runner, _RunnerArity
         fun () ->
             %% need to send a message even if init_runner fails, hence 'after'
             IRR = try InitRunner(InitRet) after Control ! {self(), init_runner} end,
+            receive go -> ok end,
             Runner(IRR)
         end),
     add_workers(More - 1, Exec, InitRet, [Worker | NewWorkers]).
 
-remove_workers(0, Workers) ->
-    Workers;
-remove_workers(Less, [Worker | Workers]) ->
-    exit(Worker, kill),
-    receive
-        {'EXIT', Worker, _Reason} ->
-            remove_workers(Less + 1, Workers)
-    end.
+stop_workers(Workers) ->
+    %% try to stop concurrently
+    [exit(Worker, kill) || Worker <- Workers],
+    [receive {'EXIT', Worker, _Reason} -> ok end || Worker <- Workers].
 
 %%%===================================================================
 %%% Internal: code generation

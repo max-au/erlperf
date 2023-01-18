@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0
+- fixed -w (--warmup) argument missing from command line
+- synchronised worker startup when adding concurrency
+- concurrent worker shutdown when reducing concurrency
+- elevated job & benchmark process priority to avoid result skew
+- implemented scheduling problem detection (e.g. lock contention),
+  added a busy loop method workaround
+
 ## 2.0.2
 - added convenience command line options: init_all, done_all, init_runner_all
 

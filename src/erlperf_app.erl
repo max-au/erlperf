@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%% Continuous benchmarking application behaviour.
 %%% @end

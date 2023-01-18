@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%%   System monitor: scheduler, RAM, and benchmarks throughput
 %%%  samples.

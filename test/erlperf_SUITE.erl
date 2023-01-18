@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author Maxim Fedorov <maximfca@gmail.com>
-%%% @copyright (c) 2019-2022 Maxim Fedorov
+%%% @copyright (c) 2019-2023 Maxim Fedorov
 %%% @doc
 %%%     Tests benchmark module, machine-readable output for benchmarks.
 %%% @end
@@ -27,6 +27,8 @@
     code_extra_node/1, mixed/0, mixed/1,
     crasher/0, crasher/1, undefer/0, undefer/1, compare/1,
     errors/0, errors/1]).
+
+-export([overhead_benchmark/0, overhead_benchmark/1]).
 
 -export([
     cmd_line_simple/1, cmd_line_verbose/1, cmd_line_compare/1,
@@ -70,7 +72,10 @@ groups() ->
             compare,
             errors
         ]},
-        {cmdline, [sequential], [
+        {overhead, [], [
+            overhead_benchmark
+        ]},
+        {cmdline, [], [
             cmd_line_simple,
             cmd_line_verbose,
             cmd_line_compare,
@@ -87,13 +92,13 @@ groups() ->
         {squeeze, [], [
             mfa_squeeze
         ]},
-        {replay, [sequential], [
+        {replay, [], [
             replay
         ]}
     ].
 
 all() ->
-    [{group, benchmark}, {group, cmdline}, {group, squeeze}, {group, replay}].
+    [{group, benchmark}, {group, overhead}, {group, cmdline}, {group, squeeze}, {group, replay}].
 
 %%--------------------------------------------------------------------
 %% Helpers: gen_server implementation
@@ -283,6 +288,25 @@ mfa_squeeze(Config) when is_list(Config) ->
             ?assert(QPS > 0),
             ?assert(CPU > 1)
     end.
+
+overhead_benchmark() ->
+    [{doc, "Ensures that benchmarking overhead when running multiple concurrent processes is not too high"},
+        {timetrap, {seconds, 20}}].
+
+overhead_benchmark(Config) when is_list(Config) ->
+    Init = fun() -> ets:new(tab, [public, named_table]) end,
+    Done = fun(Tab) -> ets:delete(Tab) end,
+    Runner = fun() -> true = ets:insert(tab, {key, value}) end, %% this inevitably causes lock contention
+    %% take 10 samples of 100 ms, which should complete in about a second, or at least less than two
+    %% extra 3 samples of 100 ms are taken for 'warmup' cycles, to calibrate the sleep/4 function, that
+    %% is expected to switch into busy_wait mode.
+    Before = os:system_time(millisecond),
+    QPS = erlperf:run(#{runner => Runner, init => Init, done => Done},
+        #{concurrency => 50, samples => 10, sample_duration => 100, warmup => 3}),
+    TimeSpent = os:system_time(millisecond) - Before,
+    ?assert(QPS > 0, {qps, QPS}),
+    ?assert(TimeSpent > 500, {too_quick, TimeSpent, expected, 1000}),
+    ?assert(TimeSpent < 2000, {too_slow, TimeSpent, expected, 1000}).
 
 %%--------------------------------------------------------------------
 %% command-line testing

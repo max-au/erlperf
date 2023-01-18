@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%% Command line interface adapter.
 %%% @end
@@ -37,7 +37,7 @@ main(Args) ->
                     RunOpts0;
                 {ok, Str} ->
                     [erlang:error({loop, Option}) || Option <-
-                        [concurrency, sample_duration, samples, waarmup, cv], is_map_key(Option, RunOpts0)],
+                        [concurrency, sample_duration, samples, warmup, cv], is_map_key(Option, RunOpts0)],
                     RunOpts0#{loop => parse_loop(Str)}
                 end,
 

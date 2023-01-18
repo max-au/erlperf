@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%% Logs monitoring events for the entire cluster, to file or device.
 %%%  Requires erlperf_history service running, fails otherwise.

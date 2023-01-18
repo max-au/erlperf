@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
 %%% Collects, accumulates &amp; filters cluster-wide monitoring events.
 %%% Essentially a simple in-memory database for quick cluster overview.

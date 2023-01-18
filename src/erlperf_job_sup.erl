@@ -1,4 +1,4 @@
-%%% @copyright (C) 2019-2022, Maxim Fedorov
+%%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% Supervises statically started jobs.
 %%% @end
 -module(erlperf_job_sup).
