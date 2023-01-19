@@ -1,9 +1,8 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
-%%% @doc
+%%% @private
 %%% Top-level supervisor. Always starts process group scope
 %%%  for `erlperf'. Depending on the configuration starts
 %%%  a number of jobs or a cluster-wide monitoring solution.
-%%% @end
 -module(erlperf_sup).
 -author("maximfca@gmail.com").
 

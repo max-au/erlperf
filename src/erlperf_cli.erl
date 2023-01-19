@@ -1,7 +1,6 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
-%%% @doc
+%%% @private
 %%% Command line interface adapter.
-%%% @end
 -module(erlperf_cli).
 -author("maximfca@gmail.com").
 
@@ -243,7 +242,7 @@ main_impl(RunOpts, SqueezeOpts, Codes) ->
             true ->
                 {ok, P} = pg:start_link(erlperf),
                 {ok, Mon} = erlperf_monitor:start_link(),
-                {ok, Log} = erlperf_file_log:start_link(group_leader()),
+                {ok, Log} = erlperf_file_log:start_link(),
                 {P, Mon, Log};
             false ->
                 {undefined, undefined, undefined}

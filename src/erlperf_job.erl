@@ -1,26 +1,125 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
-%%% Job runner, taking care of init/done, workers added and removed.
-%%% Works just like a simple_one_for_one supervisor (children are
-%%%   temporary runners).
-%%% There are two benchmarking modes: continuous (activated by
-%%%   setting non-zero concurrency), and sample-based (activated
-%%%   manually and deactivated after runner does requested amount
-%%%   of iterations).
+%%% Job is an instance of a benchmark.
 %%%
-%%% Job is defined with 4 functions (code map): <ul>
-%%%  <li>init/0 - called once when starting the job</li>
-%%%  <li>init_runner/0 - called when starting a runner process, or
-%%%    init_runner/1 that accepts return value from init/0. It is
-%%%    an error to omit init/0 if init_runner/1 is defined, but
-%%%    it is not an error to have init_runner/0 when init/0 exists</li>
-%%%  <li>runner/0 - ignores init_runner/0,1</li>
-%%%  <li>runner/1 - requires init_runner/0,1 return value as initial state,
-%%%    passes it as state for the next invocation (accumulator)</li>
-%%%  <li>runner/2 - requires init_runner/0,1 return value as initial state,
-%%%    passes accumulator as a second argument</li>
-%%%  <li>done/1 - requires init/0 (and accepts its return value)</li>
-%%% </ul>
+%%% Every job has a corresponding temporary Erlang module generated. Use
+%%% {@link source/1} to get the source code of the generated module.
+%%% The structure of this code is an implementation detail and may change
+%%% between releases.
+%%%
+%%% Job controls how many workers are executing runner code in
+%%% a tight loop. It does not restart a failing worker, user must ensure
+%%% proper error handing and reporting. If a worker process crashes,
+%%% standard CRASH REPORT message is printed to the log (console).
+%%%
+%%% Job accepts a {@link code_map()} containing at least a runner
+%%% function definition.
+%%%
+%%% See {@link callable()} for accepted function definitions.
+%%%
+%%% Different callable forms have different performance overhead. Overhead can be measured
+%%% with {@link erlperf:compare/2}:
+%%% ```
+%%% erlperf:compare([
+%%%    #{runner => fun (V) -> rand:mwc59(V) end, init_runner => {rand, mwc59_seed, []}},
+%%%    #{runner => "run(V) -> rand:mwc59(V).", init_runner => {rand, mwc59_seed, []}}
+%%% ], #{}).
+%%  [4371541,131460130]
+%%% '''
+%%% In the example above, callable defined as `fun' is 30 times slower than the code compiled
+%%% from the source. The difference is caused by the Erlang Runtime implementation, where
+%%% indirect calls via `fun' are considerably more expensive. As a rule of thumb, source
+%%% code provides the smallest overhead, followed by MFA tuples.
+%%%
+%%% You can mix &amp; match various definition styles. In the example below, `init/0'
+%%% starts an extra {@link pg} scope, `done/0' stops it, and `init_runner/1' takes
+%%% the total heap size of `pg' scope controller to pass it to the `runner/1'.
+%%% ```
+%%%   erlperf_job:start_link(
+%%%       #{
+%%%           runner => "run(Max) -> rand:uniform(Max).",
+%%%           init => {pg, start_link, [scope]},
+%%%           init_runner =>
+%%%               fun ({ok, Pid}) ->
+%%%                   {total_heap_size, THS} = erlang:process_info(Pid, total_heap_size),
+%%%                   THS
+%%%               end,
+%%%           done => fun ({ok, Pid}) -> gen_server:stop(Pid) end
+%%%       }
+%%%   ).
+%%% '''
+%%% Same example defined with just the source code:
+%%% ```
+%%% erlperf_job:start_link(
+%%%     #{
+%%%         runner => "runner(Max) -> rand:uniform(Max).",
+%%%         init => "init() -> pg:start_link().",
+%%%         init_runner => "init_runner({ok, Pid}) ->
+%%%             {total_heap_size, THS} = erlang:process_info(Pid, total_heap_size),
+%%%             THS.",
+%%%         done => "done({ok, Pid}) -> gen_server:stop(Pid)."
+%%%     }
+%%% ).
+%%% '''
+%%%
+%%% <h2>Runner function</h2>
+%%% Runner function represents code that is run in the tight loop, counting iterations
+%%% aggregated between all workers. To give an example, benchmarking a function that takes
+%%% exactly a millisecond to execute, with 2 workers, for 2 seconds, will result in
+%%% 4000 iterations in total. This would be the value returned by {@link sample/1}.
+%%%
+%%%
+%%% Runner definition can accept zero, one or two arguments.
+%%%
+%%% `runner/0' ignores the value returned by init_runner/0,1.
+%%%
+%%% `runner/1' accepts the value returned by init_runner/0,1. It is an error to define
+%%% `runner/1' without `init_runner/0,1' defined. This example prints "0" in a
+%%% tight loop, measuring {@link io:format/2} performance:
+%%% ```
+%%% #{
+%%%    runner => "run(Init) -> io:format(\"~b~n\", [Init]).",
+%%%    init_runner => "0."
+%%% }
+%%% '''
+%%%
+%%% `runner/2' adds second argument, accumulator, initially set to the
+%%% value returned by init_runner/0,1. Subsequent invocations receive
+%%% value returned by the previous runner invocation. Example:
+%%% ```
+%%% #{
+%%%    runner => "run(Init, Acc) -> io:format(\"~b~n\", [Init + Acc]), Acc + 1.",
+%%%    init_runner => "0."
+%%% }
+%%% '''
+%%% Running this benchmark prints monotonically increasing numbers. This
+%%% may be useful to test stateful functions, for example, fast Random Number
+%%% Generators introduced in OTP 25:
+%%% ```
+%%% ./erlperf --init_runner 'rand:mwc59_seed().' 'run(_, Cur) -> rand:mwc59(Cur).'
+%%% Code                                    ||        QPS       Time
+%%% run(_, Cur) -> rand:mwc59(Cur).          1     123 Mi       8 ns
+%%% '''
+%%%
+%%%
+%%% <h2>Common Test usage</h2>
+%%%
+%%% Example using `erlperf_job' directly, as a part of Common Test test case:
+%%% ```
+%%% benchmark_rand(Config) when is_list(Config) ->
+%%%     %% run timer:sleep(1000) for 5 second, 4 runners
+%%%     {ok, Job} = erlperf_job:start_link(#{runner => {timer, sleep, [1000]}}),
+%%%     Handle = erlperf_job:handle(Job),
+%%%     ok = erlperf_job:set_concurrency(Job, 4), %% 4 runner instances
+%%%     InitialIterations = erlperf_job:sample(Handle),
+%%%     timer:sleep(5000),
+%%%     IterationsIn5Sec = erlperf_job:sample(Handle) - InitialIterations,
+%%%     erlperf_job:request_stop(Job), %% use gen:stop(Job) for synchronous call
+%%%     %% expect at least 16 iterations (and up to 20)
+%%%     ?assert(IterationsIn5Sec >= 16, {too_slow, IterationsIn5Sec}),
+%%%     ?assert(IterationsIn5Sec =< 20, {too_fast, IterationsIn5Sec}).
+%%% '''
+%%%
 %%% @end
 -module(erlperf_job).
 -author("maximfca@gmail.com").
@@ -51,15 +150,34 @@
 ]).
 
 %% MFArgs: module, function, arguments.
--type mfargs() :: {module(), atom(), [term()]}.
+-type mfargs() :: {Module :: module(), Function :: atom(), Args :: [term()]}.
+%% `Module', `Function', `Args' accepted by {@link erlang:apply/3}.
 
 %% Callable: one or more MFArgs, or a function object, or source code
 -type callable() ::
-    mfargs() |
-    [mfargs()] |
+    string() |
     fun() |
     fun((term()) -> term()) |
-    string().
+    fun((term(), term()) -> term()) |
+    mfargs() |
+    [mfargs()].
+%% Function definition to use as a runner, init, done or init_runner.
+%%
+%% <ul>
+%%   <li>`string().' Erlang code ending with `.' (period). Example, zero arity:
+%%       `"runner() -> timer:sleep(1)."', arity one: `"runner(T) -> timer:sleep(T)."',
+%%       arity two: `"runner(Init, Acc) -> Acc + Init."'. It is allowed to omit the header
+%%       for zero arity function, so it becomes `"timer:sleep(1)."'</li>
+%%   <li>`fun()' function accepting no arguments, example: `fun() -> timer:sleep(1000) end'</li>
+%%   <li>`fun(term()) -> term()' function accepting one argument, example: `fun(Time) -> timer:sleep(Time) end'</li>
+%%   <li>`fun(term(), term()) -> term()' function accepting two arguments, example: `fun() -> timer:sleep(1000) end'</li>
+%%   <li>`mfargs()' tuple accepted by {@link erlang:apply/3}.
+%%        Example: `{rand, uniform, [10]}'</li>
+%%   <li>`[mfargs()]' list of MFA tuples, example: `[{rand, uniform, [10]}]'.
+%%        This functionality is experimental, and only used to replay a recorded calls
+%%        list. May not be supported in future releases.</li>
+%% </ul>
+
 
 %% Benchmark code: init, init_runner, runner, done.
 -type code_map() :: #{
@@ -68,53 +186,90 @@
     init_runner => callable(),
     done => callable()
 }.
+%% Code map contains definitions for:
+%%
+%% <ul>
+%%   <li>`init/0' - called once when starting the job for the first time.
+%%       The call is made in the context of the job controller. It is
+%%       guaranteed to run through the entire benchmark job. So if your
+%%       benchmark needs to create additional resources - ETS tables, or
+%%       linked processes, like extra {@link pg} scopes, - init/0 is a
+%%       good choice. If init/0 fails, the entire job startup fails</li>
+%%   <li>`init_runner/0,1' - called when the job starts a new worker. init_runner/1
+%%       accepts the value returned by init/0. It is an error to omit init/0
+%%       if init_runner/1 is defined. It is allowed to have init_runner/0
+%%       when init/0 exists. The call to init_runner is made in the context of the
+%%       worker process, so you can initialise process-local values (e.g.
+%%       process dictionary)</li>
+%%   <li>`runner/0,1,2' defines the function that will be called in a tight loop.
+%%       See detailed description below</li>
+%%   <li>`done/0,1' - called when the job terminates, to clean up any resources
+%%       that are not destroyed automatically. done/0 accepts the return of init/0.
+%%       Call is made in the context of the job controller</li>
+%% </ul>
 
 %% Internal (opaque) type, please do not use
--type handle() :: {module(), non_neg_integer()}.
+-opaque handle() :: {module(), non_neg_integer()}.
 
-%% Temporary type until OTP25 is everywhere
+%% Temporary type until OTP25+ is everywhere, and OTP <25 support is no longer needed
 -type server_ref() :: gen_server:server_ref().
 
--export_type([callable/0, code_map/0]).
+-export_type([mfargs/0, handle/0, callable/0, code_map/0]).
 
 %% @doc
-%% Starts the benchmark instance.
-%% Job starts with no workers, use set_concurrency/2 to start some.
+%% Starts the benchmark job.
+%%
+%% Job starts with no workers, use {@link set_concurrency/2} to start workers.
 -spec start(code_map()) -> {ok, pid()} | {error, term()}.
 start(#{runner := _MustHave} = Code) ->
     gen_server:start(?MODULE, generate(Code), []).
 
 %% @doc
-%% Starts the benchmark instance and links it to caller.
-%% Job starts with no workers, use set_concurrency/2 to start some.
+%% Starts the job and links it to caller.
+%%
+%% Job starts with no workers, use {@link set_concurrency/2} to start workers.
 -spec start_link(code_map()) -> {ok, pid()} | {error, term()}.
 start_link(#{runner := _MustHave} = Code) ->
     gen_server:start_link(?MODULE, generate(Code), []).
 
 %% @doc
-%% Requests this job to stop. Caller should monitor the job process
-%% to find our when the job has actually stopped.
+%% Requests this job to stop.
+%%
+%% Job is stopped asynchronously. Caller should monitor the job process
+%% to find out when the job actually stopped.
 -spec request_stop(server_ref()) -> ok.
 request_stop(JobId) ->
     gen_server:cast(JobId, stop).
 
 %% @doc
+%% Returns the number of concurrently running workers for this job.
+%%
+%% This number may be lower than the amount requested by {@link set_concurrency/2}
+%% if workers crash.
 -spec concurrency(server_ref()) -> Concurrency :: non_neg_integer().
 concurrency(JobId) ->
     gen_server:call(JobId, concurrency).
 
 %% @doc
-%% Change concurrency setting for this job.
+%% Sets the number of concurrently running workers for this job.
+%%
 %% Does not reset counting. May never return if init_runner
-%% does not return.
+%% hangs and does not return control the the job.
+%% `Concurrency': number of processes to run. It can be higher than
+%% the current count (making the job to start more workers), or
+%% lower, making the job to stop some.
+%%
+%% Workers that crashes are not restarted automatically.
 -spec set_concurrency(server_ref(), non_neg_integer()) -> ok.
 set_concurrency(JobId, Concurrency) ->
     gen_server:call(JobId, {set_concurrency, Concurrency}, infinity).
 
 %% @doc
-%% Executes the runner SampleCount times, returns time in microseconds it
-%%  took to execute. Similar to `timer:tc'. Has less overhead compared to
-%%  continuous benchmarking, therefore can be used even for very fast functions.
+%% Run the timed mode benchmark for a job, similar to {@link timer:tc/3}.
+%%
+%% Executes the runner `SampleCount' times. Returns time in microseconds.
+%% Has less overhead compared to continuous benchmarking, therefore can
+%% be used even for very fast functions.
 -spec measure(server_ref(), SampleCount :: non_neg_integer()) ->
     TimeUs :: non_neg_integer() | already_started.
 measure(JobId, SampleCount) ->
@@ -122,30 +277,43 @@ measure(JobId, SampleCount) ->
 
 %% @doc
 %% Returns the sampling handle for the job.
+%%
+%% The returned value is opaque, and is an implementation detail,
+%% do not use it in any quality other than passing to {@link sample/1}.
 -spec handle(server_ref()) -> handle().
 handle(JobId) ->
     gen_server:call(JobId, handle).
 
 %% @doc
-%% Returns the current sample for the job, or undefined if the job has stopped.
--spec sample(handle()) -> non_neg_integer() | undefined.
+%% Returns the current iteration counter.
+%%
+%% The iteration counter (sample) monotonically grows by 1
+%% every time the runner function is called (without waiting
+%% for it to return, so a function that unconditionally crashes
+%% still generates a counter of 1).
+-spec sample(Handle :: handle()) -> non_neg_integer() | undefined.
 sample({Module, Arity}) ->
     {call_count, Count} = erlang:trace_info({Module, Module, Arity}, call_count),
     Count.
 
 %% @doc
 %% Returns the source code that was generated for this job.
--spec source(handle()) -> [string()].
+-spec source(server_ref()) -> [string()].
 source(JobId) ->
     gen_server:call(JobId, source).
 
 %% @doc
 %% Sets job process priority when there are workers running.
+%%
 %% Worker processes may utilise all schedulers, making job
 %%  process to lose control over starting and stopping workers.
 %% By default, job process sets 'high' priority when there are
 %%  any workers running.
 %% Returns the previous setting.
+%%
+%% This function must be called before {@link set_concurrency/2},
+%% otherwise it has no effect until all workers are stopped, and
+%% then restarted.
 -spec set_priority(server_ref(), erlang:priority_level()) -> erlang:priority_level().
 set_priority(JobId, Priority) ->
     gen_server:call(JobId, {priority, Priority}).
@@ -188,6 +356,7 @@ set_priority(JobId, Priority) ->
 %%%===================================================================
 %%% gen_server callbacks
 
+%% @private
 init(#exec{name = Mod, binary = Bin, init = Init, runner = {_Fun, Arity}} = Exec) ->
     %% need to trap exits to avoid crashing and not cleaning up the loaded module
     erlang:process_flag(trap_exit, true),
@@ -209,6 +378,7 @@ init(#exec{name = Mod, binary = Bin, init = Init, runner = {_Fun, Arity}} = Exec
     {priority, Prio} = erlang:process_info(self(), priority),
     {ok, #erlperf_job_state{exec = Exec, init_result = InitRet, initial_priority = Prio}}.
 
+%% @private
 -spec handle_call(term(), {pid(), reference()}, state()) -> {reply, term(), state()}.
 handle_call(handle, _From, #erlperf_job_state{exec = #exec{name = Name, runner = {_Fun, Arity}}} = State) ->
     {reply, {Name, Arity}, State};
@@ -234,9 +404,11 @@ handle_call({priority, Prio}, _From, #erlperf_job_state{priority = Old} = State)
 handle_call({set_concurrency, Concurrency}, _From, #erlperf_job_state{workers = Workers} = State) ->
     {reply, ok, State#erlperf_job_state{workers = set_concurrency_impl(length(Workers), Concurrency, State)}}.
 
+%% @private
 handle_cast(stop, State) ->
     {stop, normal, State}.
 
+%% @private
 -spec handle_info(term(), state()) -> {noreply, state()}.
 handle_info({'EXIT', SampleWorker, Reason},
     #erlperf_job_state{sample_workers = SampleWorkers} = State) when is_map_key(SampleWorker, SampleWorkers) ->
@@ -249,6 +421,7 @@ handle_info({'EXIT', Worker, Reason}, #erlperf_job_state{workers = Workers} = St
 handle_info({'EXIT', Worker, Reason}, #erlperf_job_state{workers = Workers} = State) ->
     {stop, Reason, State#erlperf_job_state{workers = lists:delete(Worker, Workers)}}.
 
+%% @private
 -spec terminate(term(), state()) -> ok.
 terminate(_Reason, #erlperf_job_state{init_result = IR, workers = Workers, exec = #exec{name = Mod, done = Done}} = State) ->
     %% terminate all workers first

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.1
+- improved documentation, switched from edoc to ex_doc
+- added convenience functions and defaults to monitor, file_log, cluster_monitor and history
+- refined types for better Dialyzer analysis
+
 ## 2.1.0
 - fixed -w (--warmup) argument missing from command line
 - synchronised worker startup when adding concurrency

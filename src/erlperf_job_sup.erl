@@ -1,6 +1,6 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
+%%% @private
 %%% Supervises statically started jobs.
-%%% @end
 -module(erlperf_job_sup).
 -author("maximfca@gmail.com").
 

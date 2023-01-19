@@ -3,7 +3,8 @@
 [![Build Status](https://github.com/max-au/erlperf/actions/workflows/erlang.yml/badge.svg?branch=master)](https://github.com/max-au/erlperf/actions) [![Hex.pm](https://img.shields.io/hexpm/v/erlperf.svg)](https://hex.pm/packages/erlperf) [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/erlperf)
 
 Erlang Performance & Benchmarking Suite.
-Simple way to say "this code is faster than that one".
+Simple way to say "this code is faster than that one". See the detailed
+reference for `erlperf` and `erlperf_job` modules.
 
 Build (tested with OTP 23, 24, 25):
 
@@ -11,9 +12,15 @@ Build (tested with OTP 23, 24, 25):
     $ rebar3 as prod escriptize
 ```
 
-# TL; DR
+## Command Line examples
+Command-line benchmarking does not save results anywhere. It is designed to provide a quick answer to the question
+"how fast the code is". Beware of the shell escaping your code in an unpredictable way!
 
-Find out how many times per sample (second) a function can be run  (beware of shell escaping your code!):
+Examples:
+
+1. Run a single process iterating `rand:uniform()` in a tight loop for 3 seconds,
+printing **average iterations per second** (~14 millions) and an average time
+to run a single iteration (71 ns).
 
 ```bash
     $ ./erlperf 'rand:uniform().'
@@ -21,8 +28,7 @@ Find out how many times per sample (second) a function can be run  (beware of sh
     rand:uniform().          1   13942 Ki      71 ns
 ```
 
-Run four processes executing `rand:uniform()` in a tight loop, and see that code is indeed
-concurrent:
+2. Run four processes doing this same concurrently.
 
 ```bash
     $ ./erlperf 'rand:uniform().' -c 4
@@ -30,7 +36,8 @@ concurrent:
     rand:uniform().          4   39489 Ki     100 ns
 ```
 
-Benchmark one function vs another, taking average of 10 seconds and skipping first second:
+3. Benchmark `rand:uniform()` vs `crypto:strong_rand_bytes(2)` for 10 seconds, adding
+an extra second to warm up the algorithms.
 
 ```bash
     $ ./erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1
@@ -39,22 +46,22 @@ Benchmark one function vs another, taking average of 10 seconds and skipping fir
     crypto:strong_rand_bytes(2).          1    1136 Ki     880 ns      7%
 ```
 
-Run a function passing the state into the next iteration. This code demonstrates performance difference
+4. Run a function passing the state into the next iteration. This code demonstrates performance difference
 between `rand:uniform_s` with state passed explicitly, and `rand:uniform` reading state from the process
-dictionary:
+dictionary.
 
 ```bash
-    $ ./erlperf 'r(_Init, S) -> {_, NS} = rand:uniform_s(S), NS.' --init_runner 'rand:seed(exsss).' 'r() -> rand:uniform().'
+    $ ./erlperf 'r(_, Seed) -> {_, Next} = rand:uniform_s(Seed), Next.' \
+                --init_runner 'rand:seed(exsss).' \
+                'r() -> rand:uniform().'
     Code                                                    ||        QPS       Time     Rel
     r(_Init, S) -> {_, NS} = rand:uniform_s(S), NS.          1   20272 Ki      49 ns    100%
     r() -> rand:uniform().                                   1   15081 Ki      66 ns     74%
 ```
 
-Squeeze mode: 
-measure how concurrent your code is. In the example below, `code:is_loaded/1` is implemented as
+5. Estimate `code:is_loaded/1` concurrency characteristics. This function is implemented as
 `gen_server:call`, and all calculations are done in a single process. It is still possible to
-squeeze a bit more from a single process by putting work into the queue from multiple runners,
-therefore the example may show higher concurrency.
+squeeze a bit more from a single process by putting work into the queue from multiple runners.
 
 ```bash
     $ ./erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).' --squeeze
@@ -62,25 +69,28 @@ therefore the example may show higher concurrency.
     code:is_loaded(local_udp).          5     927 Ki    5390 ns
 ```
 
-Start a server (`pg` scope in this example), use it in benchmark, and shut down after:
+6. Start a server (`pg` scope in this example), use it in benchmark, and shut down after.
 
 ```bash
-    $ ./erlperf 'pg:join(scope, group, self()), pg:leave(scope, group, self()).' --init 'pg:start_link(scope).' --done 'gen_server:stop(scope).'
+    $ ./erlperf 'pg:join(scope, group, self()), pg:leave(scope, group, self()).' \
+                --init 'pg:start_link(scope).' --done 'gen_server:stop(scope).'
     Code                                                                   ||        QPS       Time
     pg:join(scope, group, self()), pg:leave(scope, group, self()).          1     336 Ki    2978 ns
 ```
 
-Run the same code with different arguments, returned from `init_runner` function:
+7. Run the same code with different arguments, returned from `init_runner` function. Note the trick
+of adding extra spaces in the source code to know which code is where.
 
 ```bash
-    $ ./erlperf 'runner(X) -> timer:sleep(X).' --init_runner '1.' 'runner(X) -> timer:sleep(X).' --init_runner '2.'
+    $ ./erlperf 'runner(X) -> timer:sleep(X).' --init_runner '1.' \
+                '  runner(X) -> timer:sleep(X).' --init_runner '2.'
     Code                                 ||        QPS       Time     Rel
     runner(X) -> timer:sleep(X).          1        498    2008 us    100%
-    runner(X) -> timer:sleep(X).          1        332    3012 us     66%
+      runner(X) -> timer:sleep(X).        1        332    3012 us     66%
 ```
     
-Determine how many times a process can join/leave pg2 group on a single node (use OTP 23, because pg2 is removed in
-later versions):
+8. Determine how many times a process can join/leave pg2 group on a single node (requires OTP 23
+or older, as pg2 is removed in later versions).
 
 ```bash
     $ ./erlperf 'ok = pg2:join(g, self()), ok = pg2:leave(g, self()).' --init 'pg2:create(g).'
@@ -88,17 +98,18 @@ later versions):
     ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1      64021   15619 ns
 ```
 
-Compare `pg` with `pg2` running two nodes (note the `-i` argument spawning an extra node to
+9. Compare `pg` with `pg2` running two nodes (note the `-i` argument spawning an isolated extra node to
 run benchmark in):
 
 ```bash
-    ./erlperf 'ok = pg2:join(g, self()), ok = pg2:leave(g, self()).' --init 'pg2:create(g).' 'ok = pg:join(g, self()), ok = pg:leave(g, self()).' --init 'pg:start(pg).' -i
+    ./erlperf 'ok = pg2:join(g, self()), ok = pg2:leave(g, self()).' --init 'pg2:create(g).' \
+              'ok = pg:join(g, self()), ok = pg:leave(g, self()).' --init 'pg:start(pg).' -i
     Code                                                         ||        QPS       Time     Rel
     ok = pg:join(g, self()), ok = pg:leave(g, self()).            1     241 Ki    4147 ns    100%
     ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1       1415     707 us      0%
 ```
 
-Watch the progress of your test running (use -v option) with extra information: scheduler utilisation, dirty CPU & IO
+10. Watch the progress of your test running (`-v` option) with extra information: scheduler utilisation, dirty CPU & IO
 schedulers, number of running processes, ports, ETS tables, and memory consumption. Last column is the job throughput.
 When there are multiple jobs, multiple columns are printed.
 
@@ -116,8 +127,25 @@ When there are multiple jobs, multiple columns are printed.
     rand:uniform().          8   54372 Ki     144 ns
 ```
 
-Command-line benchmarking does not save results anywhere. It is designed to provide a quick answer to the question
-"is that piece of code faster".
+## Continuous (default) mode
+Benchmarking is done by counting number of *runner* iterations done over
+a specified period of time (**sample_duration**). See `erlperf` reference for
+more details.
+
+Two examples below demonstrate the effect caused by changing *sample_duration*.
+First run takes 20 samples (`-s 20`) with 100 ms duration. Second invocation
+takes the same 20 sample, but with 200 ms duration (`-d 200`). Note that throughput 
+doubled due to sample duration increase, but average time of a single iteration stays
+unchanged.
+
+```bash
+    $ ./erlperf 'rand:uniform().' -d 100 -s 20
+    Code                    ||        QPS       Time
+    rand:uniform().          1    1480 Ki      67 ns
+    $ ./erlperf 'rand:uniform().' -d 200 -s 20
+    Code                    ||        QPS       Time
+    rand:uniform().          1    2771 Ki      72 ns
+```
 
 ## Timed (low overhead) mode
 Since 2.0, `erlperf` includes timed mode. It cannot be used for continuous benchmarking. In this mode
@@ -131,14 +159,27 @@ runner code is executed specified amount of times in a tight loop:
 ```
 
 This mode effectively runs following code: `loop(0) -> ok; loop(Count) -> rand:uniform(), loop(Count - 1).`
-Timed mode reduced benchmarking overhead (compared to continuous mode) by 1-2 ns per iteration.
+Timed mode has slightly less overhead compared to continuous mode.
 
-# Benchmarking existing application
+## Concurrency estimation (squeeze) mode
+Sometimes it's necessary to measure code running multiple concurrent
+processes, and find out when it saturates the VM. It can be used to
+detect bottlenecks, e.g. lock contention, single dispatcher process
+bottleneck etc. Example (with maximum concurrency limited to 50):
+
+```erlang
+    > erlperf:run({code, is_loaded, [local_udp]}, #{warmup => 1}, #{max => 50}).
+    {1284971,7}
+```
+
+In this example, 7 concurrent processes were able to squeeze 1284971 calls per second
+for `code:is_loaded(local_udp)`.
+
+## Benchmarking existing application
 `erlperf` can be used to measure performance of your application running in production, or code that is stored
 on disk.
 
-## Running with existing codebase
-Use `-pa` argument to add extra code path. Example:
+Use `-pa` argument to add an extra code path. Example:
 ```bash
     $ ./erlperf 'argparse:parse([], #{}).' -pa _build/test/lib/argparse/ebin
     Code                             ||        QPS       Time
@@ -153,8 +194,8 @@ If you need to add multiple released applications, supply `ERL_LIBS` environment
 ```
 
 ## Usage in production
-It is possible to use `erlperf` to benchmark a running application (even in production, assuming necessary safety
-precautions). To achieve this, add `erlperf` as a dependency, and use remote shell:
+It is possible to use `erlperf` to benchmark a running application (even in production, assuming
+necessary safety precautions). To achieve this, add `erlperf` as a dependency, and use remote shell:
 
 ```bash
     # run a mock production node with `erl -sname production`
@@ -164,7 +205,7 @@ precautions). To achieve this, add `erlperf` as a dependency, and use remote she
     488
 ```
 
-## Continuous benchmarking
+## Infinite continuous benchmarking
 You can run a job continuously, to examine performance gains or losses while doing 
 hot code reload. This process is designed to help during development and testing stages, 
 allowing to quickly notice performance regressions.
@@ -180,7 +221,7 @@ Example below assumes you have `erlperf` application started (e.g. in a `rebar3 
 
 ```erlang
     % start a logger that prints VM monitoring information
-    > {ok, Logger} = erlperf_file_log:start_link(group_leader()).
+    > {ok, Logger} = erlperf_file_log:start_link().
     {ok,<0.235.0>}
     
     % start a job that will continuously benchmark mymod:do(),
@@ -203,91 +244,16 @@ Example below assumes you have `erlperf` application started (e.g. in a `rebar3 
     % see that after hot code reload throughput halved!
 ```
 
-# Reference Guide
-
-## Terms
+## erlperf Terms explained
+See `erlperf_job` for the detailed reference and ways to define a *callable*.
 
 * **runner**: code that gets continuously executed
-* **init**: code that runs one when the job starts (for example, start some registered process or create an ETS table)
-* **done**: code that runs when the job is about to stop (used for cleanup, e.g. stop some registered process)
-* **init_runner**: code that is executed in every runner process (e.g. add something to process dictionary)
-* **job**: single instance of the running benchmark (multiple runners)
-* **concurrency**: how many processes are running concurrently, executing *runner* code
-* **throughput**: total number of calls per sampling interval (for all concurrent processes)
-* **cv**: coefficient of variation, the ratio of the standard deviation to the mean. Used to stop the concurrency 
-(squeeze) test, the lower the *cv*, the longer it will take to stabilise and complete the test
-
-## Using `erlperf` from `rebar3 shell` or `erl` REPL
-Supported use-cases:
- * single run for MFA: ```erlperf:run({rand, uniform, [1000]}).``` or ```erlperf:run(rand, uniform, []).```
- * anonymous function: ```erlperf:run(fun() -> rand:uniform(100) end).```
- * anonymous function with an argument: ```erlperf:run(fun(Init) -> io_lib:format("~tp", [Init]) end).```
- * source code: ```erlperf:run("runner() -> rand:uniform(20).").```
- * (experimental) call chain: ```erlperf:run([{rand, uniform, [10]}, {erlang, node, []}]).```,
-     see [recording call chain](#recording-call-chain). Call chain may contain only complete
-     MFA tuples and cannot be mixed with functions.
- 
-Startup and teardown 
- * init, done and init_runner are supported (there is no done_runner,
- because it is never stopped in a graceful way)
- * init_runner and done may be defined with arity 0 and 1 (in the latter case,
- result of init/0 passed as an argument)
- * runner can be of arity 0, 1 (accepting init_runner return value) or 2 (first
- argument is init_runner return value, and second is state passed between runner invocations)
- 
-Example with mixed MFA:
-```erlang
-   erlperf:run(
-       #{
-           runner => fun(Arg) -> rand:uniform(Arg) end,
-           init => 
-               {pg, start_link, []},
-           init_runner =>
-               fun ({ok, Pid}) -> 
-                   {total_heap_size, THS} = erlang:process_info(Pid, total_heap_size),
-                   THS
-               end,
-           done => fun ({ok, Pid}) -> gen_server:stop(Pid) end
-       }
-   ).
-``` 
- 
-Same example with source code:
-```erlang
-erlperf:run(
-    #{
-        runner => "runner(Max) -> rand:uniform(Max).",
-        init => "init() -> pg:start_link().",
-        init_runner => "init_runner({ok, Pid}) ->
-            {total_heap_size, THS} = erlang:process_info(Pid, total_heap_size),
-            THS.",
-        done => "done({ok, Pid}) -> gen_server:stop(Pid)."
-    }       
-).
-```
-
-## Measurement options
-Benchmarking is done by counting number of *runner* iterations done over
-a specified period of time (**sample_duration**). 
-By default, erlperf performs no **warmup** cycle, then takes 3 consecutive 
-**samples**, using **concurrency** of 1 (single runner). It is possible 
-to tune this behaviour by specifying run_options:
-```erlang
-    erlperf:run({erlang, node, []}, #{concurrency => 2, samples => 10, warmup => 1}).
-```
-
-Next example takes 10 samples with 100 ms duration. Note that throughput is reported
-per *sample_duration*: if you shorten duration in half, throughput report will also be
-halved:
-
-```bash
-    $ ./erlperf 'rand:uniform().' -d 100 -s 20
-    Code                    ||        QPS       Time
-    rand:uniform().          1    1480 Ki      67 ns
-    $ ./erlperf 'rand:uniform().' -d 200 -s 20
-    Code                    ||        QPS       Time
-    rand:uniform().          1    2771 Ki      72 ns
-```
+* **init**: code that runs one when the job starts. Use it to start registered process or create ETS tables.
+* **done**: code that runs when the job is about to stop. Used for cleanup, e.g. stopping registered processes
+* **init_runner**: code that is executed in every runner process (e.g. populate process dictionary)
+* **job**: single instance of the running benchmark
+* **concurrency**: how many worker processes are running concurrently, executing *runner* code
+* **throughput**: total number of calls per sampling interval (by all workers of the job)
 
 ## Benchmarking under lock contention
 ERTS cannot guarantee precise timing when there is severe lock contention happening,
@@ -296,23 +262,11 @@ and scheduler utilisation is 100%. This often happens with ETS:
     $ ./erlperf -c 50 'ets:insert(ac_tab, {1, 2}).'
 ```
 Running 50 concurrent processes trying to overwrite the very same key of an ETS
-table leads to lock contention on a shared resource (ETS table/bucket lock).
-
-
-
-## Concurrency test (squeeze)
-Sometimes it's necessary to measure code running multiple concurrent
-processes, and find out when it saturates the node. It can be used to
-detect bottlenecks, e.g. lock contention, single dispatcher process
-bottleneck etc.. Example (with maximum concurrency limited to 50):
-
-```erlang
-    > erlperf:run({code, is_loaded, [local_udp]}, #{warmup => 1}, #{max => 50}).
-    {1284971,7}
-```
-
-In this example, 7 concurrent processes were able to squeeze 1284971 calls per second
-for `code:is_loaded(local_udp)`.
+table leads to lock contention on a shared resource (ETS table/bucket lock). erlperf
+may detect this issue and switch to a busy wait loop for precise timing. This may
+result in lowered throughput and other metrics skew. erlperf does not attempt to
+pinpoint the source of contention, it is up to user to figure that out. It's recommended
+to use lock-counting emulator, or Linux `perf` utility to troubleshoot VM-level issues.
 
 ## Benchmarking overhead
 Benchmarking overhead varies depending on ERTS version and the way runner code is supplied. See the example: 
@@ -354,38 +308,30 @@ to `erlperf` for benchmarking purposes:
     > erlperf:run(#{runner => binary_to_term(Trace)}).
 ```
 
-It's possible to create a Common Test testcase using recorded samples.
-Just put the recorded file into xxx_SUITE_data:
-```erlang
-    benchmark_check(Config) ->
-        {ok, Bin} = file:read_file(filename:join(?config(data_dir, Config), "pg.trace")),
-        QPS = erlperf:run(#{runner => binary_to_term(Bin)}),
-        ?assert(QPS > 500). % catches regression for QPS falling below 500
-```
+## Experimental: benchmarking in a cluster
 
-## Experimental: starting jobs in a cluster
-
-It's possible to run a job on a separate node in the cluster.
+It's possible to run a job on a separate node in the cluster. See
+`erlperf_cluster_monitor` for additional details.
 
 ```erlang
     % watch the entire cluster (printed to console)
     (node1@host)> {ok, _} = erlperf_history:start_link().
     {ok,<0.213.0>}
-    (node1@host)> {ok, ClusterLogger} = erlperf_cluster_monitor:start_link(group_leader(), [sched_util, jobs]).
+    (node1@host)> {ok, ClusterLogger} = erlperf_cluster_monitor:start_link(group_leader(), 1000, [sched_util, jobs]).
     {ok, <0.216.0>}
     
     % also log cluster-wide reports to file (jobs & sched_util)
-    (node1@host)> {ok, FileLogger} = erlperf_cluster_monitor:start_link("/tmp/cluster", [time, sched_util, jobs]).
+    (node1@host)> {ok, FileLogger} = erlperf_cluster_monitor:start_link("/tmp/cluster", 1000, [time, sched_util, jobs]).
     {ok, <0.223.0>}
 
     % run the benchmarking process in a different node of your cluster
     (node1@host)> rpc:call('node2@host', erlperf, run, [#{runner => {rand, uniform, []}}]).
 ```
 
-Cluster-wide monitoring will reflect changes accordingly.
+Cluster-wide monitoring reflects changes accordingly.
 
 
-# Implementation details
+## Implementation details
 Starting with 2.0, `erlperf` uses call counting for continuous benchmarking purposes. This allows
 the tightest possible loop without extra runtime calls. Running
 `erlperf 'rand:uniform().' --init '1'. --done '2.' --init_runner '3.'` results in creating,

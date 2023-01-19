@@ -1,6 +1,49 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
-%%%   Application API. Benchmark/squeeze implementation.
+%%% Convenience APIs for benchmarking.
+%%%
+%%% This module implements following benchmarking modes:
+%%% <ul>
+%%%   <li>Continuous mode</li>
+%%%   <li>Timed (low overhead) mode</li>
+%%%   <li>Concurrency estimation (squeeze) mode</li>
+%%% </ul>
+%%%
+%%% <h2>Continuous mode</h2>
+%%% This is the default mode. Separate {@link erlperf_job} is started for
+%%% each benchmark, iterating supplied runner in a tight loop,
+%%% bumping a counter for each iteration of each worker. `erlperf' reads
+%%% this counter every second, calculating the difference between current
+%%% and previous value. This difference is called a <strong>sample</strong>.
+%%%
+%%% By default, `erlperf' collects 3 samples and stops, reporting the average.
+%%% To give an example, if your function runs for 20 milliseconds, `erlperf'
+%%% may capture samples with 48, 52 and 50 iterations. The average would be 50.
+%%%
+%%% This approach works well for CPU-bound calculations, but may produce
+%%% unexpected results for slow functions taking longer than sample duration.
+%%% For example, timer:sleep(2000) with default settings yields zero throughput.
+%%% You can change the sample duration and the number of samples to take to
+%%% avoid that.
+%%%
+%%% <h2>Timed mode</h2>
+%%% In this mode `erlperf' loops your code a specified amount of times, measuring
+%%% how long it took to complete. It is essentially what {@link timer:tc/3} does. This mode
+%%% has slightly less overhead compared to continuous mode. This difference may be
+%%% significant if you’re profiling low-level ERTS primitives.
+%%%
+%%% This mode does not support `concurrency' setting (concurrency locked to 1).
+%%%
+%%% <h2>Concurrency estimation mode</h2>
+%%% In this mode `erlperf' attempts to estimate how concurrent the supplied
+%%% runner code is. The run consists of multiple passes, increasing concurrency
+%%% with each pass, and stopping when total throughput is no longer growing.
+%%% This mode proves useful to find concurrency bottlenecks. For example, some
+%%% functions may have limited throughput because they execute remote calls
+%%% served by a single process. See {@link benchmark/3} for the detailed
+%%% description.
+%%%
+%%%
 %%% @end
 -module(erlperf).
 -author("maximfca@gmail.com").
@@ -18,86 +61,122 @@
     time/2
 ]).
 
-%% accepted code variants
+%% compare/2 accepts code map, or just the runner code
 -type code() :: erlperf_job:code_map() | erlperf_job:callable().
+%% Convenience type used in `run/1,2,3' and `compare/2'.
 
 %% node isolation options:
 -type isolation() :: #{
     host => string()
 }.
+%% Node isolation settings.
+%%
+%% Currently, `host' selection is not supported.
 
-%% Single run options
 -type run_options() :: #{
-    % number of concurrently running workers (defaults to 1)
-    % ignored when running concurrency test
     concurrency => pos_integer(),
-    %% sampling interval: default is 1000 milliseconds (to measure QPS)
-    %% 'undefined' duration is used as a flag for timed benchmarking
     sample_duration => pos_integer() | undefined,
-    %% warmup samples: first 'warmup' cycles are ignored (defaults to 0)
     warmup => non_neg_integer(),
-    %% number of samples to take, defaults to 3
     samples => pos_integer(),
-    %% coefficient of variation, when supplied, at least 'samples'
-    %%  samples must be within the specified coefficient
-    %% experimental feature allowing to benchmark processes with
-    %%  wildly jumping throughput
     cv => float(),
-    %% sets the supervising process priority. Default is 'high',
-    %% allowing test runner to be scheduled even under high scheduler
-    %% utilisation (which is expected for a benchmark running many
-    %% concurrent processes)
     priority => erlang:priority_level(),
-    %% report form for single benchmark: when set to 'extended',
-    %%  all non-warmup samples are returned as a list.
-    %% When missing, only the average QPS is returned.
     report => extended,
-    %% this run requires a fresh BEAM that must be stopped to
-    %%  clear up the mess
     isolation => isolation()
 }.
+%% Benchmarking mode selection and parameters of the benchmark run.
+%%
+%% <ul>
+%%   <li>`concurrency': number of workers to run, applies only for the continuous
+%%       benchmarking mode</li>
+%%   <li>`cv': coefficient of variation. </li>
+%%   <li>`isolation': request separate Erlang VM instance
+%%       for each job. Some benchmarks may lead to internal VM structures corruption,
+%%       or change global structures affecting other benchmarks when running in the
+%%       same VM. `host' sub-option is currently ignored.</li>
+%%   <li>`priority': sets the job controller process priority (defaults to `high').
+%%       Running with `normal' or lower priority may prevent the controller from timely
+%%       starting ot stopping workers.</li>
+%%   <li>`report': applies only for continuous mode. Pass `extended' to get the list
+%%       of actual samples, rather than average (useful for gathering advanced
+%%       statistical metrics in the user code).</li>
+%%   <li>`samples': how many samples to take before stopping (continuous mode), or
+%%       how many iterations to do (timed mode). Default is 3, combined with the default
+%%       1-second `sample_duration', it results in a 3 second continuous run</li>
+%%   <li>`sample_duration': time, milliseconds, between taking iteration counter
+%%       samples. Multiplied by `samples', this parameter defines the total benchmark
+%%       run duration. Default is 1000 ms. Passing `undefined' engages timed run</li>
+%%   <li>`warmup': how many extra samples are collected and discarded at the beginning
+%%       of the continuous run. Does not apply to timed runs.</li>
+%% </ul>
 
 %% Concurrency test options
 -type concurrency_test() :: #{
-    %%  Detecting a local maximum. If maximum
-    %%  throughput is reached with N concurrent workers, benchmark
-    %%  continues for at least another 'threshold' more workers.
-    %% Example: simple 'ok.' benchmark with 4-core CPU will stop
-    %%  at 7 concurrent workers (as 5, 6 and 7 workers don't add
-    %%  to throughput)
     threshold => pos_integer(),
-    %% Minimum and maximum number of workers to try
     min => pos_integer(),
     max => pos_integer()
 }.
+%% Concurrency estimation mode options.
+%%
+%% <ul>
+%%   <li>`min': initial number of workers, default is 1</li>
+%%   <li>`max': maximum number of workers, defaults to `erlang:system_info(process_limit) - 1000'</li>
+%%   <li>`threshold': stop concurrency run when adding this amount of workers does
+%%     not result in further total throughput increase. Default is 3</li>
+%% </ul>
 
 %% Single run result: one or multiple samples (depending on report verbosity)
--type run_result() :: Throughput :: non_neg_integer() | [non_neg_integer()].
+-type run_result() :: non_neg_integer() | [non_neg_integer()].
+%% Benchmark results.
+%%
+%% For continuous mode, an average (arithmetic mean) of the collected samples,
+%% or a list of all samples collected.
+%% Timed mode returns elapsed time (microseconds).
+
 
 %% Concurrency test result (non-verbose)
 -type concurrency_result() :: {QPS :: non_neg_integer(), Concurrency :: non_neg_integer()}.
+%% Basic concurrency estimation report
+%%
+%% Only the highest throughput run is reported.
 
 %% Extended report returns all samples collected.
-%% Basic report returns only maximum throughput achieved with
-%%  amount of runners running at that time.
 -type concurrency_test_result() :: concurrency_result() | {Max :: concurrency_result(), [concurrency_result()]}.
+%% Extended concurrency estimation report
+%%
+%% Contains reports for all runs, starting from the minimum number of workers,
+%% to the maximum achieved, plus `threshold' more.
 
--export_type([isolation/0, run_options/0, concurrency_test/0]).
+-export_type([code/0, isolation/0, run_options/0, concurrency_test/0]).
 
 %% Milliseconds, timeout for any remote node operation
 -define(REMOTE_NODE_TIMEOUT, 10000).
 
 
 %% @doc
-%% Generic execution engine. Supply multiple code versions, run options and either
-%%  `undefined' for usual benchmarking, or squeeze mode settings for concurrency test.
+%% Generic benchmarking suite, accepting multiple code maps, modes and options.
+%%
+%% `Codes' contain a list of code versions. Every element is a separate job that runs
+%% in parallel with all other jobs. Same `RunOptions' are applied to all jobs.
+%%
+%% `ConcurrencyTestOpts' specifies options for concurrency estimation mode. Passing
+%% `undefined' results in a continuous or a timed run. It is not supported to
+%% run multiple jobs while doing a concurrency estimation run.
+%%
+%% Concurrency estimation run consists of multiple passes. First pass is done with
+%% a `min' number of workers, subsequent passes are increasing concurrency by 1, until
+%% `max' concurrency is reached, or total job iterations stop growing for `threshold'
+%% consecutive passes. To give an example, if your code is not concurrent at all,
+%% and you try to benchmark it with `threshold' set to 3, there will be 4 passes in
+%% total: first with a single worker, then 3 more, demonstrating no throughput growth.
+%%
+%% In this mode, job is started once before the first pass. Subsequent passes only
+%% change the concurrency. All other options passed in `RunOptions' are honoured. So,
+%% if you set `samples' to 30, keeping default duration of a second, every single
+%% pass will last for 30 seconds.
 %% @end
-%% TODO: figure out what is wrong with this spec.
-%% Somehow having run_result() in this spec makes Dialyzer to completely
-%%  ignore option of concurrency_test_result() return.
-%%-spec benchmark([erlperf_job:code()], run_options(), concurrency_test() | undefined) ->
-%%    run_result() | [run_result()] | concurrency_test_result().
-benchmark(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
+-spec benchmark([erlperf_job:code_map()], RunOptions :: run_options(), undefined) -> run_result() | [run_result()];
+               ([erlperf_job:code_map()], RunOptions :: run_options(), concurrency_test()) -> concurrency_test_result().
+benchmark(Codes, #{isolation := _Isolation} = Options, ConcurrencyTestOpts) ->
     erlang:is_alive() orelse erlang:error(not_alive),
     %% isolation requested: need to rely on cluster_monitor and other distributed things.
     {Peers, Nodes} = prepare_nodes(length(Codes)),
@@ -105,7 +184,7 @@ benchmark(Codes, #{isolation := _Isolation} = Options, ConOpts) ->
     try
         %% no timeout here (except that rpc itself could time out)
         Promises =
-            [erpc:send_request(Node, erlperf, run, [Code, Opts, ConOpts])
+            [erpc:send_request(Node, erlperf, run, [Code, Opts, ConcurrencyTestOpts])
                 || {Node, Code} <- lists:zip(Nodes, Codes)],
         %% now wait for everyone to respond
         [erpc:receive_response(Promise) || Promise <- Promises]
@@ -131,16 +210,29 @@ benchmark(Codes, Options, ConOpts) ->
     end.
 
 %% @doc
-%% Comparison run: starts several jobs and measures throughput for
-%%  all of them at the same time.
-%% All job options are honoured, and if there is isolation applied,
-%%  every job runs its own node.
--spec compare([code()], run_options()) -> [run_result()].
+%% Comparison run: benchmark multiple jobs at the same time.
+%%
+%% A job is defined by either {@link erlperf_job:code_map()},
+%% or just the runner {@link erlperf_job:callable(). callable}.
+%% Example comparing {@link rand:uniform/0} %% performance
+%% to {@link rand:mwc59/1}:
+%% ```
+%% (erlperf@ubuntu22)7> erlperf:compare([
+%%     {rand, uniform, []},
+%%     #{runner => "run(X) -> rand:mwc59(X).", init_runner => {rand, mwc59_seed, []}}
+%% ], #{}).
+%% [14823854,134121999]
+%% '''
+%%
+%% See {@link benchmark/3} for `RunOptions' definition and return values.
+-spec compare(Codes :: [code()], RunOptions :: run_options()) -> [run_result()].
 compare(Codes, RunOptions) ->
     benchmark([code(Code) || Code <- Codes], RunOptions, undefined).
 
+%% @private
 %% @doc
 %% Records call trace, so it could be used to benchmark later.
+%% Experimental, do not use.
 -spec record(module(), atom(), non_neg_integer(), pos_integer()) ->
     [[{module(), atom(), [term()]}]].
 record(Module, Function, Arity, TimeMs) ->
@@ -158,27 +250,39 @@ record(Module, Function, Arity, TimeMs) ->
             Samples
     end.
 
-%% @doc Simple case.
-%%  Runs a single benchmark, and returns a steady QPS number.
-%%  Job specification may include suite &amp; worker init parts, suite cleanup,
-%%  worker code, job name and identifier (id).
+%% @doc
+%% Runs a single benchmark for 3 seconds, returns average number of iterations per second.
+%%
+%% Accepts either a full {@link erlperf_job:code_map()}, or just the runner
+%% {@link erlperf_job:callable(). callable}.
 -spec run(code()) -> non_neg_integer().
 run(Code) ->
     [Series] = benchmark([code(Code)], #{}, undefined),
     Series.
 
 %% @doc
-%% Single throughput measurement cycle.
-%% Additional options are applied.
--spec run(code(), run_options()) -> run_result().
+%% Runs a single benchmark job, returns average number of iterations per second.
+%%
+%% Accepts either a full {@link erlperf_job:code_map()}, or just the runner
+%% {@link erlperf_job:callable(). callable}.
+%% Equivalent of returning the first result of `run([Code], RunOptions)'.
+-spec run(Code :: code(), RunOptions :: run_options()) -> run_result().
 run(Code, RunOptions) ->
     [Series] = benchmark([code(Code)], RunOptions, undefined),
     Series.
 
 %% @doc
-%% Concurrency measurement run.
--spec run(code() | module(), run_options() | atom(), concurrency_test() | [term()]) ->
-    run_result() | concurrency_test_result().
+%% Concurrency estimation run, or an alias for quick benchmarking of an MFA tuple.
+%%
+%% Attempt to find concurrency characteristics of the runner code,
+%% see {@link benchmark/3} for a detailed description. Accepts either a full
+%% {@link erlperf_job:code_map()}, or just the runner
+%% {@link erlperf_job:callable(). callable}.
+%%
+%% When `Module' and `Function' are atoms, and `Args' is a list, this call is
+%% equivalent of `run(Module, Function, Args)'.
+-spec run(code(), run_options(), concurrency_test()) -> concurrency_test_result();
+         (module(), atom(), [term()]) -> run_result().
 run(Module, Function, Args) when is_atom(Module), is_atom(Function), is_list(Args) ->
     %% this typo is so common that I decided to have this as an unofficial API
     run({Module, Function, Args});
@@ -187,8 +291,13 @@ run(Code, RunOptions, ConTestOpts) ->
     Series.
 
 %% @doc
-%% Starts a new continuously running job with the specified concurrency.
-%% Requires `erlperf' application to be started.
+%% Starts a new supervised job with the specified concurrency.
+%%
+%% Requires `erlperf' application to be running. Returns job
+%% controller process identifier.
+%% This function is designed for distributed benchmarking, when
+%% jobs are started in different nodes, and monitored via
+%% {@link erlperf_cluster_monitor}.
 -spec start(code(), Concurrency :: non_neg_integer()) -> pid().
 start(Code, Concurrency) ->
     {ok, Job} = supervisor:start_child(erlperf_job_sup, [code(Code)]),
@@ -196,8 +305,11 @@ start(Code, Concurrency) ->
     Job.
 
 %% @doc
-%% Timed benchmarking, runs the code Count times and returns
-%%  time in microseconds it took to execute the code.
+%% Timed benchmarking mode. Iterates the runner code `Count' times and returns
+%% elapsed time in microseconds.
+%%
+%% This method has lower overhead compared to continuous benchmarking. It is
+%% not supported to run multiple workers in this mode.
 -spec time(code(), Count :: non_neg_integer()) -> TimeUs :: non_neg_integer().
 time(Code, Count) ->
     [Series] = benchmark([code(Code)], #{samples => Count, sample_duration => undefined}, undefined),

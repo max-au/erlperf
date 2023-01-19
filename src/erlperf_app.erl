@@ -1,7 +1,6 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
-%%% @doc
+%%% @private
 %%% Continuous benchmarking application behaviour.
-%%% @end
 -module(erlperf_app).
 -author("maximfca@gmail.com").
 

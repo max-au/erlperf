@@ -51,11 +51,11 @@ monitor_cluster(Config) ->
     AllFields = [time, sched_util, dcpu, dio, processes, ports, ets, memory_total, memory_processes, memory_ets, jobs],
 
     %% start cluster monitor
-    {ok, ClusterHandlePid} = erlperf_cluster_monitor:start_link({?MODULE, handle_update, [Control]}, AllFields),
+    {ok, ClusterHandlePid} = erlperf_cluster_monitor:start_link({?MODULE, handle_update, [Control]}, 1000, AllFields),
     %% start another cluster monitor (now printing to console)
-    {ok, ClusterMonPid} = erlperf_cluster_monitor:start_link(erlang:group_leader(), AllFields),
+    {ok, ClusterMonPid} = erlperf_cluster_monitor:start_link(),
     %% start 3rd cluster monitor printing to a file
-    {ok, ClusterFilePid} = erlperf_cluster_monitor:start_link(LogFile, AllFields),
+    {ok, ClusterFilePid} = erlperf_cluster_monitor:start_link(LogFile, 1000, AllFields),
 
     %% start a benchmark on the different node, and monitor progress
     %% link the process to kill it if timetrap fires
