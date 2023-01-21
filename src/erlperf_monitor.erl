@@ -3,7 +3,7 @@
 %%% @doc
 %%% System monitor: reports scheduler, RAM, and benchmarks.
 %%%
-%%% Monitor is started by default when `erlperf' starts
+%%% Monitor is started by default when {@link erlperf} starts
 %%% as an application. Monitor is not started for ad-hoc
 %%% benchmarking (e.g. command-line, unless verbose logging
 %%% is requested).
@@ -30,6 +30,11 @@
 %%%                         processes => 95,
 %%%                         sched_util => 0.013187335960637163,
 %%% '''
+%%%
+%%% Note that the monitor may report differently from the benchmark
+%%% run results. It is running with lower priority and may be significantly
+%%% affected by scheduler starvation, timing issues etc..
+%%%
 %%%
 %%%
 %%% @end
@@ -63,23 +68,25 @@
 
 
 -type monitor_sample() :: #{
-    time => integer(),
-    sched_util => float(),
-    dcpu => float(),
-    dio => float(),
-    processes => integer(),
-    ports => integer(),
-    ets => integer(),
-    memory_total => non_neg_integer(),
-    memory_processes => non_neg_integer(),
-    memory_binary => non_neg_integer(),
-    memory_ets => non_neg_integer(),
+    time := integer(),
+    node := node(),
+    sched_util := float(),
+    dcpu := float(),
+    dio := float(),
+    processes := integer(),
+    ports := integer(),
+    ets := integer(),
+    memory_total := non_neg_integer(),
+    memory_processes := non_neg_integer(),
+    memory_binary := non_neg_integer(),
+    memory_ets := non_neg_integer(),
     jobs => [{Job :: pid(), Cycles :: non_neg_integer()}]
 }.
 %% Monitoring report
 %%
 %% <ul>
 %%   <li>`time': timestamp when the report is generates, wall clock, milliseconds</li>
+%%   <li>`node': originating Erlang node name</li>
 %%   <li>`sched_util': normal scheduler utilisation, percentage. See {@link scheduler:utilization/1}</li>
 %%   <li>`dcpu': dirty CPU scheduler utilisation, percentage.</li>
 %%   <li>`dio': dirty IO scheduler utilisation, percentage</li>
@@ -250,6 +257,7 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
     %
     Sample = #{
         time => erlang:system_time(millisecond),
+        node => node(),
         memory_total => erlang:memory(total),
         memory_processes => erlang:memory(processes),
         memory_binary => erlang:memory(binary),
@@ -261,10 +269,9 @@ handle_tick(#state{sched_data = Data, normal = Normal, dcpu = Dcpu} = State) ->
         ports => erlang:system_info(port_count),
         ets => erlang:system_info(ets_count),
         jobs => Jobs},
-    % notify local subscribers
-    [Pid ! Sample || Pid <- pg:get_members(erlperf, {erlperf_monitor, node()})],
-    % notify global subscribers
-    [Pid ! {node(), Sample} || Pid <- pg:get_members(erlperf, cluster_monitor)],
+    % notify local & global subscribers
+    Subscribers = pg:get_members(erlperf, {erlperf_monitor, node()}) ++ pg:get_members(erlperf, cluster_monitor),
+    [Pid ! Sample || Pid <- Subscribers],
     %%
     NextTick = State#state.next_tick + State#state.tick,
     erlang:start_timer(NextTick, self(), tick, [{abs, true}]),

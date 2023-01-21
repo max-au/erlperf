@@ -61,8 +61,8 @@
 %% Take a sample every second
 -define(DEFAULT_INTERVAL, 1000).
 
--define(KNOWN_FIELDS, [time, sched_util, dcpu, dio, processes, ports, ets, memory_total,
-    memory_processes, memory_ets, jobs]).
+-define(KNOWN_FIELDS, [time, node, sched_util, dcpu, dio, processes, ports, ets, memory_total,
+    memory_processes, memory_binary, memory_ets, jobs]).
 
 %% @equiv start_link(erlang:group_leader(), 1000, undefined)
 -spec start_link() -> {ok, Pid :: pid()} | {error, Reason :: term()}.
@@ -90,22 +90,21 @@ start_link(Handler, Interval, Fields) ->
 
 %% System monitor state
 -record(state, {
-    %% next tick
-    next :: integer(),
+    next :: integer(), %% absolute timer for the next tick
     interval :: pos_integer(),
     handler :: handler(),
     fields :: [atom()] | undefined,
-    %% previously printed header, elements are node() | field name | job PID
+    %% previously printed header
     %% if the new header is different from the previous one, it gets printed
-    header = [] :: [atom() | {jobs, [pid()]} | {node, node()}]
+    header = [] :: [atom() | [pid()]]
 }).
 
 %% @private
 init([Handler, Interval, Fields0]) ->
-    %% precise (abs) timer
     Fields = if Fields0 =:= undefined -> ?KNOWN_FIELDS; true -> Fields0 end,
-    Next = erlang:monotonic_time(millisecond) + Interval,
-    {ok, handle_tick(#state{next = Next, interval = Interval, handler = make_handler(Handler), fields = Fields})}.
+    %% use absolute timer to avoid skipping ticks
+    Now = erlang:monotonic_time(millisecond),
+    {ok, handle_tick(#state{next = Now, interval = Interval, handler = make_handler(Handler), fields = Fields})}.
 
 %% @private
 handle_call(_Request, _From, _State) ->
@@ -122,16 +121,17 @@ handle_info({timeout, _, tick}, State) ->
 %%%===================================================================
 %%% Internal functions
 
-handle_tick(#state{next = Next, interval = Interval, fields = Fields, handler = Handler, header = Header} = State) ->
-    Next1 = Next + Interval,
-    %% if we supply negative timer, we crash - and restart with no messages in the queue
-    %% this could happen if handler is too slow
-    erlang:start_timer(Next1, self(), tick, [{abs, true}]),
-    %% fetch all updates from cluster history
-    Samples = erlperf_history:get(Next - Interval + erlang:time_offset(millisecond)),
+handle_tick(#state{next = Now, interval = Interval, fields = Fields, handler = Handler, header = Header} = State) ->
+    Next = Now + Interval,
+    %%
+    erlang:start_timer(Next, self(), tick, [{abs, true}]),
+    %% last interval updates
+    GetHistoryTo = Now + erlang:time_offset(millisecond),
+    %% be careful not to overlap the timings (history:get is inclusive)
+    Samples = erlperf_history:get(GetHistoryTo - Interval + 1, GetHistoryTo),
     %% now invoke the handler
-    {NewHandler, NewHeader} = run_handler(Handler, Fields, Header, lists:keysort(1, Samples)),
-    State#state{next = Next1, handler = NewHandler, header = NewHeader}.
+    {NewHandler, NewHeader} = run_handler(Handler, Fields, Header, Samples),
+    State#state{next = Next, handler = NewHandler, header = NewHeader}.
 
 make_handler({_M, _F, _A} = MFA) ->
     MFA;
@@ -148,63 +148,74 @@ run_handler(Handler, _Fields, Header, []) ->
 
 %% handler: MFA callback
 run_handler({M, F, A}, Fields, Header, Samples) ->
-    Filtered = [{Node, maps:with(Fields, Sample)} || {Node, Sample} <- Samples],
+    Filtered = [{Time, maps:with(Fields, Sample)} || {Time, Sample} <- Samples],
     {{M, F, M:F(Filtered, A)}, Header};
 
 %% built-in handler: file/console output
 run_handler({fd, IoDevice}, Fields, Header, Samples) ->
-    {NewHeader, Filtered} = lists:foldl(
-        fun ({Node, Sample}, {Hdr, Acc}) ->
-            OneNode =
-                lists:join(" ",
-                    [io_lib:format("~s", [Node]) |
-                        [formatter(F, maps:get(F, Sample)) || F <- Fields]]),
-            %% special case for Jobs: replace the field with the {jobs, [Job]}
-            FieldsWithJobs = [
-                case F of
-                    jobs -> {Pids, _} = lists:unzip(maps:get(jobs, Sample)), {jobs, Pids};
-                    F -> F
-                end || F <- Fields],
-            {[{node, Node} | FieldsWithJobs] ++ Hdr, [OneNode | Acc]}
-        end,
-        {[], []}, Samples),
+    %% the idea of the formatter below is to print lines like this:
+    %% Dane       Time     node         sched ets  memory   <123.456.1> <0.123.0>
+    %% 2022-11-12 08:35:16 node1@host   33.5%  16  128111         12345
+    %% 2022-11-12 08:35:16 node1@host   33.5%  16  128111                    9111
+
+    %% collect all jobs from all samples
+    Jobs = lists:usort(lists:foldl(
+        fun ({_Time, #{jobs := Jobs}}, Acc) -> {Pids, _} = lists:unzip(Jobs), Pids ++ Acc end,
+        [], Samples)),
+
+    %% replace atom 'jobs' with list of Jobs. This is effectively lists:keyreplace, but with no key
+    NewHeader = [if F =:= jobs -> Jobs; true -> F end || F <- Fields],
+
+    %% format specific fields of samples
+    Formatted = [
+        [formatter(F, if is_list(F) -> maps:get(jobs, Sample); true -> maps:get(F, Sample) end) || F <- NewHeader]
+        || {_Time, Sample} <- Samples],
+
+    NewLine = io_lib:nl(),
+    BinNl = list_to_binary(NewLine),
+
     %% check if header has changed and print if it has
     NewHeader =/= Header andalso
         begin
-            FmtHdr = iolist_to_binary(lists:join(" ", [header(S) || S <- NewHeader])),
-            ok = file:write(IoDevice, <<FmtHdr/binary, "\n">>)
+            FmtHdr = [header(S) || S <- NewHeader] ++ [BinNl],
+            ok = file:write(IoDevice, FmtHdr)
         end,
+
     %% print the actual line
-    Data = lists:join(" ", Filtered) ++ "\n",
-    Formatted = iolist_to_binary(Data),
-    ok = file:write(IoDevice, Formatted),
+    Data = [F ++ NewLine || F <- Formatted],
+    ok = file:write(IoDevice, Data),
     {{fd, IoDevice}, NewHeader}.
 
-header(time) -> "      date     time    TZ";
-header(sched_util) -> "%sched";
-header(dcpu) -> " %dcpu";
-header(dio) -> "  %dio";
-header(processes) -> "  procs";
-header(ports) -> "  ports";
-header(ets) -> "  ets";
-header(memory_total) -> "mem_total";
-header(memory_processes) -> " mem_proc";
-header(memory_binary) -> "  mem_bin";
-header(memory_ets) -> "  mem_ets";
-header({jobs, Jobs}) ->
-    lists:flatten([io_lib:format("~14s", [pid_to_list(Pid)]) || Pid <- Jobs]);
-header({node, Node}) ->
-    atom_to_list(Node).
+header(time) -> <<"      date     time    TZ ">>;
+header(sched_util) -> <<" %sched">>;
+header(dcpu) -> <<"  %dcpu">>;
+header(dio) -> <<"   %dio">>;
+header(processes) -> <<"   procs">>;
+header(ports) -> <<"   ports">>;
+header(ets) -> <<"   ets">>;
+header(memory_total) -> <<" mem_total">>;
+header(memory_processes) -> <<"  mem_proc">>;
+header(memory_binary) -> <<"   mem_bin">>;
+header(memory_ets) -> <<"   mem_ets">>;
+header(Jobs) when is_list(Jobs) ->
+    iolist_to_binary([io_lib:format("~16s", [pid_to_list(Pid)]) || Pid <- Jobs]);
+header(node) -> <<"node                  ">>.
 
 formatter(time, Time) ->
-    calendar:system_time_to_rfc3339(Time div 1000);
+    calendar:system_time_to_rfc3339(Time div 1000) ++ " ";
 formatter(Percent, Num) when Percent =:= sched_util; Percent =:= dcpu; Percent =:= dio ->
-    io_lib:format("~6.2f", [Num]);
+    io_lib:format("~7.2f", [Num]);
 formatter(Number, Num) when Number =:= processes; Number =:= ports ->
-    io_lib:format("~7b", [Num]);
+    io_lib:format("~8b", [Num]);
 formatter(ets, Num) ->
-    io_lib:format("~5b", [Num]);
+    io_lib:format("~6b", [Num]);
 formatter(Size, Num) when Size =:= memory_total; Size =:= memory_processes; Size =:= memory_binary; Size =:= memory_ets ->
-    io_lib:format("~9s", [erlperf_file_log:format_size(Num)]);
-formatter(jobs, Jobs) ->
-    lists:flatten([io_lib:format("~14s", [erlperf_file_log:format_number(Num)]) || {_Pid, Num} <- Jobs]).
+    io_lib:format("~10s", [erlperf_file_log:format_size(Num)]);
+formatter(Jobs, JobsInSample) when is_list(Jobs) ->
+    %% here, all Jobs must be formatter, potentially empty (if they are not in JobsInSample)
+    [case lists:keyfind(Job, 1, JobsInSample) of
+         {Job, Num} -> io_lib:format("~16s", [erlperf_file_log:format_number(Num)]);
+         false -> "                " end
+        || Job <- Jobs];
+formatter(node, Node) ->
+    io_lib:format("~*s", [-22, Node]).

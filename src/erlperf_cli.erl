@@ -1,68 +1,130 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
-%%% @private
+%%% @doc
 %%% Command line interface adapter.
+%%%
+%%% Exports functions to format {@link erlperf:benchmark/3} output
+%%% in the same way as command line interface.
 -module(erlperf_cli).
 -author("maximfca@gmail.com").
 
-%% Public API: escript
+%% Public API for escript-based benchmarks
 -export([
+    format/2,
     main/1
 ]).
 
-%% @doc Simple command-line benchmarking interface.
-%% Example: erlperf 'rand:uniform().'
+-type format_options() :: #{
+    viewport_width => pos_integer(),
+    format => basic | extended | full
+}.
+%% Defines text report format.
+%%
+%% <ul>
+%%   <li>`format':
+%%     <ul>
+%%       <li>`basic': default format containing only average throughput per `sample_duration'
+%%          and average runner runtime</li>
+%%       <li>`extended': includes median, p99 and other metrics(default for 10 and more
+%%          samples)</li>
+%%       <li>`full': includes system information in addition to `extended' output</li>
+%%     </ul>
+%%     See overview for the detailed description</li>
+%%   <li>`viewport_width': how wide the report can be, defaults to {@link io:columns/0}.
+%%       Falls back to 80 when terminal does not report width.</li>
+%% </ul>
+
+-export_type([format_options/0]).
+
+%% @doc
+%% Formats result produced by {@link erlperf:benchmark/3}.
+%%
+%% Requires full report. Does not accept basic or extended variants.
+-spec format(Reports, Options) -> iolist() when
+    Reports :: [erlperf:report()],
+    Options :: format_options().
+format(Reports, Options) ->
+    Format =
+        case maps:find(format, Options) of
+            {ok, F} ->
+                F;
+            error ->
+                %% if format is not specified, choose between basic and extended
+                %% based on amount of samples collected. Extended report does
+                %% not make much sense for 3 samples.
+                case maps:find(samples, maps:get(result, hd(Reports))) of
+                    {ok, Samples} when length(Samples) >= 10 ->
+                        extended;
+                    _ ->
+                        basic
+                end
+        end,
+    Width = maps:get(viewport_width, Options, viewport_width()),
+    %% if any of the reports has "sleep" set to busy_wait, write a warning
+    Prefix =
+        case lists:any(fun (#{sleep := busy_wait}) -> true; (_) -> false end, Reports) of
+            true ->
+                color(warning, io_lib:format("Timer accuracy problem detected, results may be inaccurate~n", []));
+            false ->
+                ""
+        end,
+    %%
+    Prefix ++ format_report(Format, Reports, Width).
+
+%%-------------------------------------------------------------------
+%% Internal implementation
+
+%% @private
+%% Used from escript invocation
 -spec main([string()]) -> no_return().
 main(Args) ->
     Prog = #{progname => "erlperf"},
     try
-        RunOpts0 = argparse:parse(Args, arguments(), Prog),
+        ParsedOpts = argparse:parse(Args, arguments(), Prog),
+
+        Verbose = maps:get(verbose, ParsedOpts, false),
 
         %% turn off logger unless verbose output is requested
-        maps:get(verbose, RunOpts0, false) =:= false andalso
-            begin
-                logger:add_primary_filter(suppress_sasl, {
-                    fun(#{meta := #{error_logger := #{tag := Tag}}}, _) when Tag =:= error; Tag =:= error_report ->
-                            stop;
-                        (_, _) ->
-                            ignore
-                    end, ok})
-            end,
+        Verbose orelse
+            logger:add_primary_filter(suppress_sasl, {
+                fun(#{meta := #{error_logger := #{tag := Tag}}}, _) when Tag =:= error; Tag =:= error_report ->
+                        stop;
+                    (_, _) ->
+                        ignore
+                end, ok}),
 
         %% timed benchmarking is not compatible with many options, and may have "loop" written as 100M, 100K
-        %% TODO: implement mutually exclusive groups in argparse
-        RunOpts =
-            case maps:find(loop, RunOpts0) of
-                error ->
-                    RunOpts0;
-                {ok, Str} ->
-                    [erlang:error({loop, Option}) || Option <-
-                        [concurrency, sample_duration, samples, warmup, cv], is_map_key(Option, RunOpts0)],
-                    RunOpts0#{loop => parse_loop(Str)}
-                end,
+        {RunOpts0, ConcurrencyTestOpts} = determine_mode(ParsedOpts),
 
         %% add code paths
         [case code:add_path(P) of true -> ok; {error, Error} -> erlang:error({add_path, {P,Error}}) end
-            || P <- maps:get(code_path, RunOpts, [])],
+            || P <- maps:get(code_path, ParsedOpts, [])],
+
         %% find all runners
-        Code0 = [parse_code(C) || C <- maps:get(code, RunOpts)],
+        Code0 = [parse_code(C) || C <- maps:get(code, ParsedOpts)],
         %% find associated init, init_runner, done
-        {_, Code} = lists:foldl(fun callable/2, {RunOpts, Code0},
+        {_, Codes} = lists:foldl(fun callable/2, {ParsedOpts, Code0},
             [{init, init_all}, {init_runner, init_runner_all}, {done, done_all}]),
-        %% figure out whether concurrency run is requested
-        COpts = case maps:find(squeeze, RunOpts) of
-                    {ok, true} ->
-                        maps:with([min, max, threshold], RunOpts);
-                    error ->
-                        #{}
-                end,
-        ROpts = maps:with([loop, concurrency, samples, sample_duration, cv, isolation, warmup, verbose],
-            RunOpts),
+
         %% when isolation is requested, the node must be distributed
-        is_map_key(isolation, RunOpts) andalso (not erlang:is_alive())
-            andalso net_kernel:start([list_to_atom(lists:concat(
-            ["erlperf-", erlang:unique_integer([positive]), "-", os:getpid()])), shortnames]),
+        RunOpts = case is_map_key(isolation, ParsedOpts) of
+                      true ->
+                          erlang:is_alive() orelse start_distribution(),
+                          RunOpts0#{isolation => #{}};
+                      false ->
+                          RunOpts0
+                  end,
+
+        FormatOpts = case maps:find(report, ParsedOpts) of
+                         {ok, Fmt1} ->
+                             #{format => Fmt1};
+                         error ->
+                             #{}
+                     end,
         %% do the actual run
-        main_impl(ROpts, COpts, Code)
+        Results = benchmark(Codes, RunOpts#{report => full}, ConcurrencyTestOpts, Verbose),
+        %% format results
+        Formatted = format(Results, FormatOpts#{viewport_width => viewport_width()}),
+        io:format(Formatted)
     catch
         error:{argparse, Reason} ->
             Fmt = argparse:format_error(Reason, arguments(), Prog),
@@ -75,7 +137,9 @@ main(Args) ->
         error:{generic, Error} ->
             format(error, "Error: ~s~n", [Error]);
         error:{loop, Option} ->
-            format(error, "Timed benchmarking is not compatible with ~s~n", [Option]);
+            format(error, "Timed benchmarking is not compatible with --~s option~n", [Option]);
+        error:{concurrency, Option} ->
+            format(error, "Concurrency estimation is not compatible with --~s option~n", [Option]);
         error:{generate, {parse, FunName, Error}} ->
             format(error, "Parse error for ~s: ~s~n", [FunName, lists:flatten(Error)]);
         error:{generate, {What, WhatArity, requires, Dep}} ->
@@ -91,6 +155,46 @@ main(Args) ->
     after
         logger:remove_primary_filter(suppress_sasl)
     end.
+
+%% timed mode
+determine_mode(#{loop := Loop} = ParsedOpts) ->
+    [erlang:error({loop, Option}) || Option <-
+        [concurrency, sample_duration, warmup, cv, concurrency_estimation], is_map_key(Option, ParsedOpts)],
+    RunOpts = maps:with([samples], ParsedOpts),
+    {RunOpts#{sample_duration => {timed, parse_loop(Loop)}}, undefined};
+
+%% concurrency estimation mode
+determine_mode(#{concurrency_estimation := true} = ParsedOpts) ->
+    [erlang:error({concurrency, Option}) || Option <-
+        [concurrency], is_map_key(Option, ParsedOpts)],
+    length(maps:get(code, ParsedOpts)) > 1 andalso
+        erlang:error({generic, "Parallel concurrency estimation runs are not supported~n"}),
+    RunOpts = maps:with([sample_duration, samples, warmup, cv], ParsedOpts),
+    {RunOpts, maps:with([min, max, threshold], ParsedOpts)};
+
+%% continuous mode
+determine_mode(ParsedOpts) ->
+    RunOpts = maps:with([concurrency, sample_duration, samples, warmup, cv], ParsedOpts),
+    {RunOpts, undefined}.
+
+%% wrapper to ensure verbose output
+benchmark(Codes, RunOpts, ConcurrencyTestOpts, false) ->
+    erlperf:benchmark(Codes, RunOpts, ConcurrencyTestOpts);
+benchmark(Codes, RunOpts, ConcurrencyTestOpts, true) ->
+    {ok, Pg} = pg:start_link(erlperf),
+    {ok, Monitor} = erlperf_monitor:start_link(),
+    {ok, Logger} = erlperf_file_log:start_link(),
+    try
+        erlperf:benchmark(Codes, RunOpts, ConcurrencyTestOpts)
+    after
+        gen:stop(Logger),
+        gen:stop(Monitor),
+        gen:stop(Pg)
+    end.
+
+start_distribution() ->
+    Node = list_to_atom(lists:concat(["erlperf-", erlang:unique_integer([positive]), "-", os:getpid()])),
+    {ok, _} = net_kernel:start([Node, shortnames]).
 
 %% formats compiler errors/warnings
 compile_errors([]) -> "";
@@ -160,6 +264,7 @@ parse_loop(Loop) ->
 
 arguments() ->
     #{help =>
+        "\nFull documentation available at: https://hexdocs.pm/erlperf/\n"
         "\nBenchmark timer:sleep(1):\n    erlperf 'timer:sleep(1).'\n"
         "Benchmark rand:uniform() vs crypto:strong_rand_bytes(2):\n    erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1\n"
         "Figure out concurrency limits:\n    erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).'\n"
@@ -180,6 +285,9 @@ arguments() ->
             #{name => warmup, short => $w, long => "-warmup",
                 help => "number of samples to skip (0)",
                 type => {int, [{min, 0}]}},
+            #{name => report, short => $r, long => "-report",
+                help => "report verbosity, full adds system information",
+                type => {atom, [basic, extended, full]}},
             #{name => cv, long => "-cv",
                 help => "coefficient of variation",
                 type => {float, [{min, 0.0}]}},
@@ -189,8 +297,8 @@ arguments() ->
                 action => append, help => "extra code path, see -pa erl documentation"},
             #{name => isolation, short => $i, long => "-isolated", type => boolean,
                 help => "run benchmarks in an isolated environment (peer node)"},
-            #{name => squeeze, short => $q, long => "-squeeze", type => boolean,
-                help => "run concurrency test"},
+            #{name => concurrency_estimation, short => $q, long => "-squeeze", type => boolean,
+                help => "run concurrency estimation test"},
             #{name => min, long => "-min",
                 help => "start with this amount of processes (1)",
                 type => {int, [{min, 1}]}},
@@ -201,7 +309,7 @@ arguments() ->
                 help => "cv at least <threshold> samples should be less than <cv> to increase concurrency", default => 3,
                 type => {int, [{min, 1}]}},
             #{name => init, long => "-init",
-                help => "init code", nargs => 1, action => append},
+                help => "init code, see erlperf_job documentation for details", nargs => 1, action => append},
             #{name => done, long => "-done",
                 help => "done code", nargs => 1, action => append},
             #{name => init_runner, long => "-init_runner",
@@ -231,85 +339,85 @@ color(error, Text) -> ?RED ++ Text ++ ?END;
 color(warning, Text) -> ?MAGENTA ++ Text ++ ?END;
 color(info, Text) -> Text.
 
-% wrong usage
-main_impl(_RunOpts, SqueezeOps, [_, _ | _]) when map_size(SqueezeOps) > 0 ->
-    io:format("Multiple concurrency tests is not supported, run it one by one~n");
+%% Report formatter
+format_report(full, [#{system := System} | _] = Reports, Width) ->
+    [format_system(System), format_report(extended, Reports, Width)];
 
-main_impl(RunOpts, SqueezeOpts, Codes) ->
-    % verbose?
-    {Pg, Monitor, Logger} =
-        case maps:get(verbose, RunOpts, false) of
-            true ->
-                {ok, P} = pg:start_link(erlperf),
-                {ok, Mon} = erlperf_monitor:start_link(),
-                {ok, Log} = erlperf_file_log:start_link(),
-                {P, Mon, Log};
-            false ->
-                {undefined, undefined, undefined}
-        end,
-    try
-        run_main(RunOpts, SqueezeOpts, Codes)
-    after
-        Logger =/= undefined andalso gen:stop(Logger),
-        Monitor =/= undefined andalso gen:stop(Monitor),
-        Pg =/= undefined andalso gen:stop(Pg)
-    end.
+format_report(extended, Reports, Width) ->
+    Sorted = sort_by(Reports),
+    #{result := #{average := MaxAvg}} = hd(Sorted),
+    Header = ["Code", "   ||", "  Samples", "      Avg", "  StdDev", "   Median", "     P99", " Iteration", "   Rel"],
+    Data = [format_report_line(MaxAvg, ReportLine, extended) || ReportLine <- Sorted],
+    format_table(remove_relative_column([Header | Data]), Width);
 
-%% low overhead mode
-run_main(#{loop := Loop}, #{}, Codes) ->
-    TimeUs = erlperf:benchmark(Codes, #{samples => Loop, sample_duration => undefined}, undefined),
-    %% for presentation purposes, convert time to QPS
-    %% Duration is fixed to 1 second here
-    QPS = [Loop * 1000000 div T || T <- TimeUs],
-    format_result(Codes, 1, QPS, [T * 1000 div Loop || T <- TimeUs]);
+format_report(basic, Reports, Width) ->
+    Sorted = sort_by(Reports),
+    #{result := #{average := MaxAvg}} = hd(Sorted),
+    Header = ["Code", "       ||", "       QPS", "      Time", "  Rel"],
+    Data0 = [format_report_line(MaxAvg, ReportLine, basic) || ReportLine <- Sorted],
+    %% remove columns that should not be displayed in basic mode
+    Data = [[C1, C2, C3, C4, C5] || [C1, C2, _, C3, _, _, _, C4, C5] <- Data0],
+    format_table(remove_relative_column([Header | Data]), Width).
 
-%% squeeze test: do not print "Relative" column as it's always 100%
-% Code                         Concurrency   Throughput
-% pg2:create(foo).                      14      9540 Ki
-run_main(RunOpts, SqueezeOps, [Code]) when map_size(SqueezeOps) > 0 ->
-    Duration = maps:get(sample_duration, RunOpts, 1000),
-    {QPS, Con} = erlperf:run(Code, RunOpts, SqueezeOps),
-    Timing = if QPS =:=0 -> infinity; true -> Duration * 1000000 div QPS * Con end,
-    format_result([Code], Con, [QPS], [Timing]);
+sort_by([#{mode := timed} | _] = Reports) ->
+    lists:sort(fun (#{result := #{average := L}}, #{result := #{average := R}}) -> L < R end, Reports);
+sort_by([#{mode := _} | _] = Reports) ->
+    lists:sort(fun (#{result := #{average := L}}, #{result := #{average := R}}) -> L > R end, Reports).
 
-%% benchmark: don't print "Relative" column for a single sample
-% erlperf 'timer:sleep(1).'
-% Code               Concurrency   Throughput
-% timer:sleep(1).              1          498
-% --
-% Code                         Concurrency   Throughput   Relative
-% rand:uniform().                        1      4303 Ki       100%
-% crypto:strong_rand_bytes(2).           1      1485 Ki        35%
+remove_relative_column([H, D]) ->
+    [lists:droplast(H), lists:droplast(D)];
+remove_relative_column(HasRelative) ->
+    HasRelative.
 
-run_main(RunOpts, _, Execs) ->
-    Concurrency = maps:get(concurrency, RunOpts, 1),
-    Duration = maps:get(sample_duration, RunOpts, 1000),
-    Throughput = erlperf:benchmark(Execs, RunOpts, undefined),
-    Timings = [if T =:= 0 -> infinity; true -> Duration * 1000000 div T * Concurrency end || T <- Throughput],
-    format_result(Execs, Concurrency, Throughput, Timings).
+format_report_line(MaxAvg, #{mode := timed, code := #{runner := Code}, result := #{average := Avg, stddev := StdDev,
+    iteration_time := IterationTime, p99 := P99, median := Median, samples := Samples},
+    run_options := #{concurrency := Concurrency}}, ReportFormat) ->
+    [
+        format_code(Code),
+        integer_to_list(Concurrency),
+        integer_to_list(length(Samples)),
+        if ReportFormat =:= basic -> erlperf_file_log:format_number(erlang:round(1000000000 / IterationTime));
+            true ->erlperf_file_log:format_duration(erlang:round(Avg * 1000)) end,
+        io_lib:format("~.2f%", [StdDev * 100 / Avg]),
+        erlperf_file_log:format_duration(Median * 1000), %% convert from ms to us
+        erlperf_file_log:format_duration(P99 * 1000), %% convert from ms to us
+        erlperf_file_log:format_duration(IterationTime), %% already in us
+        integer_to_list(erlang:round(MaxAvg * 100 / Avg)) ++ "%"
+    ];
 
-format_result(Execs, Concurrency, Throughput, Timings) ->
-    MaxQPS = lists:max(Throughput),
-    Codes = [maps:get(runner, Code) || Code <- Execs],
-    Zipped = lists:reverse(lists:keysort(2, lists:zip3(Codes, Throughput, Timings))),
-    %% Columns: Code | Concurrency | Throughput | Time | Relative
-    %% Code takes all the remaining width.
-    MaxColumns = case io:columns() of {ok, C} -> C; _ -> 80 end,
-    %% Space taken by all columns except code
-    case Throughput of
-        [_] ->
-            %% omit "Rel" when there is one result
-            MaxCodeLen = min(code_length(hd(Codes)) + 4, MaxColumns - 31),
-            io:format("~*s     ||        QPS       Time~n", [-MaxCodeLen, "Code"]),
-            io:format("~*s ~6b ~10s ~10s~n", [-MaxCodeLen, format_code(hd(Codes)), Concurrency,
-                erlperf_file_log:format_number(hd(Throughput)), erlperf_file_log:format_duration(hd(Timings))]);
-        [_|_] ->
-            MaxCodeLen = min(lists:max([code_length(Code) || Code <- Codes]) + 4, MaxColumns - 37),
-            io:format("~*s     ||        QPS       Time     Rel~n", [-MaxCodeLen, "Code"]),
-            [io:format("~*s ~6b ~10s ~10s ~6b%~n", [-MaxCodeLen, format_code(Code), Concurrency,
-                erlperf_file_log:format_number(QPS), erlperf_file_log:format_duration(Time), QPS * 100 div MaxQPS])
-                || {Code, QPS, Time}  <- Zipped]
-    end.
+format_report_line(MaxAvg, #{code := #{runner := Code}, result := #{average := Avg, stddev := StdDev,
+    iteration_time := IterationTime, p99 := P99, median := Median, samples := Samples},
+    run_options := #{concurrency := Concurrency}}, _ReportFormat) ->
+    [
+        format_code(Code),
+        integer_to_list(Concurrency),
+        integer_to_list(length(Samples) - 1),
+        erlperf_file_log:format_number(erlang:round(Avg)),
+        io_lib:format("~.2f%", [StdDev * 100 / Avg]),
+        erlperf_file_log:format_number(Median),
+        erlperf_file_log:format_number(P99),
+        erlperf_file_log:format_duration(IterationTime),
+        integer_to_list(erlang:round(Avg * 100 / MaxAvg)) ++ "%"
+    ].
+
+%% generic table formatter routine, accepting list of lists
+format_table([Header | Data] = Rows, Width) ->
+    %% find the longest string in each column
+    HdrWidths = [string:length(H) + 1 || H <- Header],
+    ColWidths = lists:foldl(
+        fun (Row, Acc) ->
+            [max(string:length(D) + 1, Old) || {D, Old} <- lists:zip(Row, Acc)]
+        end, HdrWidths, Data),
+    %% reserved (non-adjustable) columns
+    Reserved = lists:sum(tl(ColWidths)),
+    FirstColWidth = min(hd(ColWidths), Width - Reserved),
+    Format = "~*s" ++ lists:concat([io_lib:format("~~~bs", [W]) || W <- tl(ColWidths)]) ++ "~n",
+    %% just format the table
+    [io_lib:format(Format, [-FirstColWidth | Row]) || Row <- Rows].
+
+%% detects terminal width (characters) to shorten long output lines
+viewport_width() ->
+    case io:columns() of {ok, C} -> C; _ -> 80 end.
 
 format_code(Code) when is_tuple(Code) ->
     lists:flatten(io_lib:format("~tp", [Code]));
@@ -318,5 +426,14 @@ format_code(Code) when is_tuple(hd(Code)) ->
 format_code(Code) ->
     Code.
 
-code_length(Code) ->
-    length(format_code(Code)).
+format_system(#{os := OSType, system_version := SystemVsn} = System) ->
+    OS = io_lib:format("OS : ~s~n", [format_os(OSType)]),
+    CPU = if is_map_key(cpu, System) -> io_lib:format("CPU: ~s~n", [maps:get(cpu, System)]); true -> "" end,
+    VM = io_lib:format("VM : ~s~n~n", [SystemVsn]),
+    [OS, CPU, VM].
+
+format_os({unix, freebsd}) -> "FreeBSD";
+format_os({unix, darwin}) -> "MacOS";
+format_os({unix, linux}) -> "Linux";
+format_os({win32, nt}) -> "Windows";
+format_os({Family, OS}) -> lists:flatten(io_lib:format("~s/~s", [Family, OS])).

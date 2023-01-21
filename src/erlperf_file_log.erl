@@ -110,8 +110,8 @@ maybe_write_header(_, State) ->
 write_header(File, Jobs) ->
     JobCount = length(Jobs),
     Format = "~s ~6.2f ~6.2f ~6.2f ~8b ~8b ~7b ~9s ~9s ~9s ~9s" ++
-        lists:concat(lists:duplicate(JobCount, "~11s")) ++ "~n",
-    JobIds = list_to_binary(lists:flatten([io_lib:format(" ~10s", [pid_to_list(J)]) || J <- Jobs])),
+        lists:concat(lists:duplicate(JobCount, "~13s")) ++ "~n",
+    JobIds = list_to_binary(lists:flatten([io_lib:format(" ~12s", [pid_to_list(J)]) || J <- Jobs])),
     Header =  <<"\nYYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS", JobIds/binary, "\n">>,
     ok = file:write(File, Header),
     Format.
@@ -121,6 +121,8 @@ write_header(File, Jobs) ->
 %%  Unlike @see format_number, used 1024 as a base,
 %%  so 200 * 1024 is 200 Kb.
 -spec format_size(non_neg_integer()) -> string().
+format_size(Num) when Num > 1024*1024*1024*1024 * 100 ->
+    integer_to_list(round(Num / (1024*1024*1024*1024))) ++ " Tb";
 format_size(Num) when Num > 1024*1024*1024 * 100 ->
     integer_to_list(round(Num / (1024*1024*1024))) ++ " Gb";
 format_size(Num) when Num > 1024*1024*100 ->
@@ -134,6 +136,8 @@ format_size(Num) ->
 %% @doc Formats number rounded to 3 digits.
 %%  Example: 88 -> 88, 880000 -> 880 Ki, 100501 -> 101 Ki
 -spec format_number(non_neg_integer()) -> string().
+format_number(Num) when Num > 100000000000000 ->
+    integer_to_list(round(Num / 1000000000000)) ++ " Ti";
 format_number(Num) when Num > 100000000000 ->
     integer_to_list(round(Num / 1000000000)) ++ " Gi";
 format_number(Num) when Num > 100000000 ->
@@ -149,6 +153,8 @@ format_number(Num) ->
 -spec format_duration(non_neg_integer() | infinity) -> string().
 format_duration(infinity) ->
     "inf";
+format_duration(Num) when Num > 6000000000000 ->
+    integer_to_list(round(Num / 60000000000)) ++ " m";
 format_duration(Num) when Num > 100000000000 ->
     integer_to_list(round(Num / 1000000000)) ++ " s";
 format_duration(Num) when Num > 100000000 ->

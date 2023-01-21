@@ -19,7 +19,7 @@
 %%%
 %%% Different callable forms have different performance overhead. Overhead can be measured
 %%% with {@link erlperf:compare/2}:
-%%% ```
+%%% ```erlang
 %%% erlperf:compare([
 %%%    #{runner => fun (V) -> rand:mwc59(V) end, init_runner => {rand, mwc59_seed, []}},
 %%%    #{runner => "run(V) -> rand:mwc59(V).", init_runner => {rand, mwc59_seed, []}}
@@ -34,7 +34,7 @@
 %%% You can mix &amp; match various definition styles. In the example below, `init/0'
 %%% starts an extra {@link pg} scope, `done/0' stops it, and `init_runner/1' takes
 %%% the total heap size of `pg' scope controller to pass it to the `runner/1'.
-%%% ```
+%%% ```erlang
 %%%   erlperf_job:start_link(
 %%%       #{
 %%%           runner => "run(Max) -> rand:uniform(Max).",
@@ -49,7 +49,7 @@
 %%%   ).
 %%% '''
 %%% Same example defined with just the source code:
-%%% ```
+%%% ```erlang
 %%% erlperf_job:start_link(
 %%%     #{
 %%%         runner => "runner(Max) -> rand:uniform(Max).",
@@ -76,7 +76,7 @@
 %%% `runner/1' accepts the value returned by init_runner/0,1. It is an error to define
 %%% `runner/1' without `init_runner/0,1' defined. This example prints "0" in a
 %%% tight loop, measuring {@link io:format/2} performance:
-%%% ```
+%%% ```erlang
 %%% #{
 %%%    runner => "run(Init) -> io:format(\"~b~n\", [Init]).",
 %%%    init_runner => "0."
@@ -86,7 +86,7 @@
 %%% `runner/2' adds second argument, accumulator, initially set to the
 %%% value returned by init_runner/0,1. Subsequent invocations receive
 %%% value returned by the previous runner invocation. Example:
-%%% ```
+%%% ```erlang
 %%% #{
 %%%    runner => "run(Init, Acc) -> io:format(\"~b~n\", [Init + Acc]), Acc + 1.",
 %%%    init_runner => "0."
@@ -95,7 +95,7 @@
 %%% Running this benchmark prints monotonically increasing numbers. This
 %%% may be useful to test stateful functions, for example, fast Random Number
 %%% Generators introduced in OTP 25:
-%%% ```
+%%% ```bash
 %%% ./erlperf --init_runner 'rand:mwc59_seed().' 'run(_, Cur) -> rand:mwc59(Cur).'
 %%% Code                                    ||        QPS       Time
 %%% run(_, Cur) -> rand:mwc59(Cur).          1     123 Mi       8 ns
@@ -105,7 +105,7 @@
 %%% <h2>Common Test usage</h2>
 %%%
 %%% Example using `erlperf_job' directly, as a part of Common Test test case:
-%%% ```
+%%% ```erlang
 %%% benchmark_rand(Config) when is_list(Config) ->
 %%%     %% run timer:sleep(1000) for 5 second, 4 runners
 %%%     {ok, Job} = erlperf_job:start_link(#{runner => {timer, sleep, [1000]}}),

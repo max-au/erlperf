@@ -62,7 +62,7 @@ start_link(Duration) ->
 %%
 %% Returns all reports since `From' timestamp to now, sorted by timestamp.
 %% `From' is wall clock time, in milliseconds (e.g. `os:system_time(millisecond)').
--spec get(From :: integer()) -> [{node(), erlperf_monitor:monitor_sample()}].
+-spec get(From :: integer()) -> [{Time :: non_neg_integer(), erlperf_monitor:monitor_sample()}].
 get(From) ->
     get(From, os:system_time(millisecond)).
 
@@ -70,11 +70,10 @@ get(From) ->
 %% Returns cluster history reports between From and To (inclusive).
 %%
 %% `From' and `To' are wall clock time, in milliseconds (e.g. `os:system_time(millisecond)').
--spec get(From :: integer(), To :: integer()) -> [{node(), erlperf_monitor:monitor_sample()}].
+-spec get(From :: integer(), To :: integer()) -> [{Time :: non_neg_integer(), erlperf_monitor:monitor_sample()}].
 get(From, To) ->
-    % ets:fun2ms(fun ({T, _} = R) when T =< To, T >= From -> R end =>
-    %    [{{'$1','$2'},[{'=<','$1', To},{'>=','$1', From}],['$_']}]
-    ets:select(?TABLE, [{{'$1', '$2'},[{'=<', '$1', To}, {'>=', '$1', From}], ['$2']}]).
+    % ets:fun2ms(fun ({{T, _}, _} = R) when T =< To, T >= From -> {T, R} end).
+    ets:select(?TABLE, [{{{'$1', '_'}, '$2'},[{'=<', '$1', To}, {'>=', '$1', From}], [{{'$1', '$2'}}]}]).
 
 %%===================================================================
 %% gen_server implementation
@@ -87,7 +86,7 @@ get(From, To) ->
 %% @private
 init([Duration]) ->
     ok = pg:join(erlperf, cluster_monitor, self()),
-    ?TABLE = ets:new(?TABLE, [protected, ordered_set, named_table]),
+    ?TABLE = ets:new(?TABLE, [protected, ordered_set, named_table, {write_concurrency, true}]),
     {ok, #state{duration = Duration}}.
 
 %% @private
@@ -99,14 +98,15 @@ handle_cast(_Request, _State) ->
     erlang:error(notsup).
 
 %% @private
-handle_info({Node, #{time := Time} = Sample}, State) ->
-    ets:insert(?TABLE, {Time, {Node, Sample}}),
+handle_info(#{time := Time, node := Node} = Sample, State) ->
+    ets:insert(?TABLE, {{Time, Node}, Sample}),
     {noreply, maybe_clean(State)}.
 
 %% ===================================================================
 %% Internal functions
 
 maybe_clean(#state{duration = Duration} =State) ->
-    Expired = erlang:system_time(millisecond) - Duration,
-    ets:select_delete(?TABLE, [{{'$1','$2'},[{'=<','$1', Expired}],['$_']}]),
+    Expired = os:system_time(millisecond) - Duration,
+    %% ets:fun2ms(fun ({{T, _}, _}) -> T =< Expired end).
+    ets:select_delete(?TABLE, [{{{'$1', '_'},'_'},[{'=<','$1', Expired}],[true]}]),
     State.

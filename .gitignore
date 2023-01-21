@@ -3,7 +3,4 @@ _*
 *.iml
 *~
 erlperf
-/doc/*.html
-/doc/edoc-info
-/doc/stylesheet.css
-/doc/erlang.png
+doc
