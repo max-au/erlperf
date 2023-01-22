@@ -61,6 +61,6 @@ file_log(Config) when is_list(Config) ->
     ?assert(length(ConsoleLines) > 3, {"at least header and 3 samples are expected to be printed", ConsoleLines}),
     %% header must contain the job
     [Hdr, S1, S2, S3 | _] = [string:trim(lists:last(string:lexemes(Line, " "))) || Line <- ConsoleLines],
-    ?assert(is_pid(list_to_pid(Hdr))),
+    ?assert(is_pid(list_to_pid(Hdr)), {not_a_pid, Hdr}),
     Samples = [list_to_integer(S) || S <- [S1, S2, S3]],
     [?assert(Sample > 10 andalso Sample < 1000) || Sample <- Samples].

@@ -1,6 +1,15 @@
 %%% @copyright (C) 2019-2023, Maxim Fedorov
 %%% @doc
-%%%   Writes monitoring events to I/O device.
+%%% Prints monitoring reports produced by {@link erlperf_monitor} to file
+%%% or an output device.
+%%%
+%%% When the server starts up, it joins `{erlperf, Node}' process group
+%%% in the `erlperf' scope. If {@link erlperf_monitor} is also running in
+%%% the same node, reports are printed to the specified device or file.
+%%%
+%%% See {@link erlperf_monitor} for description of the monitoring report.
+%%%
+%%% `erlperf' leverages this service for verbose output during benchmarking.
 %%% @end
 -module(erlperf_file_log).
 -author("maximfca@gmail.com").
@@ -9,6 +18,7 @@
 
 %% API
 -export([
+    start_link/0,
     start_link/1,
     %% leaky API...
     format_number/1,
@@ -24,13 +34,16 @@
     handle_info/2
 ]).
 
-%%--------------------------------------------------------------------
+%% @equiv start_link(erlang:group_leader())
+-spec start_link() -> {ok, Pid :: pid()} | {error, Reason :: term()}.
+start_link() ->
+    start_link(erlang:group_leader()).
+
 %% @doc
-%% Starts the server
--spec(start_link(Filename :: string() | file:io_device()) -> {ok, Pid :: pid()} | {error, Reason :: term()}).
+%% Starts the file log process.
+-spec start_link(Filename :: string() | file:io_device()) -> {ok, Pid :: pid()} | {error, Reason :: term()}.
 start_link(Filename) ->
     gen_server:start_link(?MODULE, [Filename], []).
-
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -52,19 +65,22 @@ start_link(Filename) ->
     jobs = [] :: [erlperf_monitor:job_sample()]
 }).
 
-%% gen_server init
+%% @private
 init([Target]) ->
     % subscribe to monitor events
     ok = pg:join(erlperf, {erlperf_monitor, node()}, self()),
     WriteTo = if is_list(Target) -> {ok, LogFile} = file:open(Target, [raw, append]), LogFile; true -> Target end,
     {ok, #state{log_file = WriteTo}}.
 
+%% @private
 handle_call(_Request, _From, _State) ->
     erlang:error(notsup).
 
+%% @private
 handle_cast(_Request, _State) ->
     erlang:error(notsup).
 
+%% @private
 handle_info(#{jobs := Jobs, time := Time, sched_util := SchedUtil, dcpu := DCPU, dio := DIO, processes := Processes,
     ports := Ports, ets := Ets, memory_total := MemoryTotal, memory_processes := MemoryProcesses,
     memory_binary := MemoryBinary, memory_ets := MemoryEts}, #state{log_file = File} = State) ->
@@ -94,16 +110,19 @@ maybe_write_header(_, State) ->
 write_header(File, Jobs) ->
     JobCount = length(Jobs),
     Format = "~s ~6.2f ~6.2f ~6.2f ~8b ~8b ~7b ~9s ~9s ~9s ~9s" ++
-        lists:concat(lists:duplicate(JobCount, "~11s")) ++ "~n",
-    JobIds = list_to_binary(lists:flatten([io_lib:format(" ~10s", [pid_to_list(J)]) || J <- Jobs])),
+        lists:concat(lists:duplicate(JobCount, "~13s")) ++ "~n",
+    JobIds = list_to_binary(lists:flatten([io_lib:format(" ~12s", [pid_to_list(J)]) || J <- Jobs])),
     Header =  <<"\nYYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS", JobIds/binary, "\n">>,
     ok = file:write(File, Header),
     Format.
 
+%% @private
 %% @doc Formats size (bytes) rounded to 3 digits.
 %%  Unlike @see format_number, used 1024 as a base,
 %%  so 200 * 1024 is 200 Kb.
 -spec format_size(non_neg_integer()) -> string().
+format_size(Num) when Num > 1024*1024*1024*1024 * 100 ->
+    integer_to_list(round(Num / (1024*1024*1024*1024))) ++ " Tb";
 format_size(Num) when Num > 1024*1024*1024 * 100 ->
     integer_to_list(round(Num / (1024*1024*1024))) ++ " Gb";
 format_size(Num) when Num > 1024*1024*100 ->
@@ -113,9 +132,12 @@ format_size(Num) when Num > 1024 * 100 ->
 format_size(Num) ->
     integer_to_list(Num).
 
+%% @private
 %% @doc Formats number rounded to 3 digits.
 %%  Example: 88 -> 88, 880000 -> 880 Ki, 100501 -> 101 Ki
 -spec format_number(non_neg_integer()) -> string().
+format_number(Num) when Num > 100000000000000 ->
+    integer_to_list(round(Num / 1000000000000)) ++ " Ti";
 format_number(Num) when Num > 100000000000 ->
     integer_to_list(round(Num / 1000000000)) ++ " Gi";
 format_number(Num) when Num > 100000000 ->
@@ -125,11 +147,14 @@ format_number(Num) when Num > 100000 ->
 format_number(Num) ->
     integer_to_list(Num).
 
+%% @private
 %% @doc Formats time duration, from nanoseconds to seconds
 %%  Example: 88 -> 88 ns, 88000 -> 88 us, 10000000 -> 10 ms
 -spec format_duration(non_neg_integer() | infinity) -> string().
 format_duration(infinity) ->
     "inf";
+format_duration(Num) when Num > 6000000000000 ->
+    integer_to_list(round(Num / 60000000000)) ++ " m";
 format_duration(Num) when Num > 100000000000 ->
     integer_to_list(round(Num / 1000000000)) ++ " s";
 format_duration(Num) when Num > 100000000 ->

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.0
+- added extended and full reporting capabilities
+- implemented additional statistics (standard deviation, median, p99)
+- exported formatting APIs to allow escript-based benchmarks
+- improved documentation, switched from edoc to ex_doc
+- added convenience functions and defaults to monitor, file_log, cluster_monitor and history
+- fixed cluster monitor output for multi-node configurations
+- breaking change: consolidated monitor sample structure for cluster and local process groups
+- fixed history store
+- refined types for better Dialyzer analysis
+
 ## 2.1.0
 - fixed -w (--warmup) argument missing from command line
 - synchronised worker startup when adding concurrency

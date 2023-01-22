@@ -24,8 +24,10 @@ jobs:
       - uses: actions/checkout@v2
       - name: Run tests
         run: rebar3 ct
-      - name: Generate documentation
+      - name: Documentation
         run: rebar3 edoc
+      - name: ExDoc Documentation
+        run: if [ $(rebar3 version | awk '{print $5}') -gt 23 ]; then rebar3 ex_doc; fi;
       - shell: bash
         name: Dialyzer
         run: rebar3 dialyzer

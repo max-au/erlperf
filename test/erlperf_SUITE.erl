@@ -10,7 +10,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 
--export([suite/0, all/0, groups/0]).
+-export([suite/0, all/0, groups/0, init_per_group/2, end_per_group/2]).
 
 -export([
     start_link/0,
@@ -19,27 +19,29 @@
     handle_cast/2
 ]).
 
+%% Continuous mode benchmarks
 -export([mfa/1, mfa_with_cv/1,
     mfa_with_tiny_cv/0, mfa_with_tiny_cv/1,
-    mfa_list/1, mfa_fun/1, mfa_fun1/1, code/1,
-    code_fun/1, code_fun1/1, mfa_init/1, mfa_fun_init/1,
-    code_gen_server/1, mfa_concurrency/1, mfa_no_concurrency/1,
-    code_extra_node/1, mixed/0, mixed/1,
-    crasher/0, crasher/1, undefer/0, undefer/1, compare/1,
-    errors/0, errors/1]).
+    mfa_concurrency/1, mfa_no_concurrency/1,
+    code_extra_node/1, compare/1]).
 
--export([overhead_benchmark/0, overhead_benchmark/1]).
+%% Timed mode
+-export([mfa_timed/1]).
 
--export([
-    cmd_line_simple/1, cmd_line_verbose/1, cmd_line_compare/1,
-    cmd_line_usage/1, cmd_line_init/1,
-    cmd_line_double/1, cmd_line_triple/1, cmd_line_pg/1, cmd_line_mfa/1,
-    cmd_line_recorded/1,
-    cmd_line_squeeze/0, cmd_line_squeeze/1,
-    cmd_line_all/0, cmd_line_all/1
-]).
+%% Concurrency estimation tests
+-export([mfa_squeeze/0, mfa_squeeze/1,
+    squeeze_extended/0, squeeze_extended/1,
+    squeeze_full/0, squeeze_full/1]).
 
--export([mfa_squeeze/0, mfa_squeeze/1, replay/1, do_anything/1]).
+%% Tests for error handling
+-export([crasher/0, crasher/1, undefer/0, undefer/1, errors/0, errors/1]).
+
+-export([lock_contention/0, lock_contention/1]).
+
+-export([stat_calc/0, stat_calc/1, rand_stat/0, rand_stat/1]).
+
+%% Record-replay tests
+-export([replay/1, do_anything/1]).
 
 -behaviour(gen_server).
 
@@ -51,54 +53,33 @@ suite() ->
 
 groups() ->
     [
-        {benchmark, [parallel], [
-            mfa,
-            mfa_with_cv,
-            mfa_with_tiny_cv,
-            mfa_list,
-            mfa_fun,
-            mfa_fun1,
-            code,
-            code_fun,
-            code_fun1,
-            mfa_init,
-            mfa_fun_init,
-            code_gen_server,
-            mfa_concurrency,
-            mfa_no_concurrency,
-            code_extra_node,
-            mixed,
-            crasher, undefer,
-            compare,
-            errors
-        ]},
-        {overhead, [], [
-            overhead_benchmark
-        ]},
-        {cmdline, [], [
-            cmd_line_simple,
-            cmd_line_verbose,
-            cmd_line_compare,
-            cmd_line_squeeze,
-            cmd_line_usage,
-            cmd_line_init,
-            cmd_line_double,
-            cmd_line_triple,
-            cmd_line_pg,
-            cmd_line_mfa,
-            cmd_line_recorded,
-            cmd_line_all
-        ]},
-        {squeeze, [], [
-            mfa_squeeze
-        ]},
-        {replay, [], [
-            replay
-        ]}
+        {continuous, [parallel],
+            [mfa, mfa_with_cv, mfa_with_tiny_cv, mfa_concurrency, mfa_no_concurrency, code_extra_node, compare]},
+        {timed, [parallel],
+            [mfa_timed]},
+        {concurrency, [], [mfa_squeeze, squeeze_extended, squeeze_full]},
+        {errors, [parallel], [crasher, undefer, errors]},
+        {overhead, [], [lock_contention]},
+        {statistics, [parallel], [stat_calc, rand_stat]},
+        {replay, [], [replay]}
     ].
 
+init_per_group(squeeze, Config) ->
+    case erlang:system_info(schedulers_online) of
+        LowCPU when LowCPU < 3 ->
+            {skip, {slow_cpu, LowCPU}};
+        _ ->
+            Config
+    end;
+init_per_group(_, Config) ->
+    Config.
+
+end_per_group(_, Config) ->
+    Config.
+
 all() ->
-    [{group, benchmark}, {group, overhead}, {group, cmdline}, {group, squeeze}, {group, replay}].
+    [{group, continuous}, {group, concurrency}, {group, overhead},
+        {group, errors}, {group, statistics}, {group, replay}].
 
 %%--------------------------------------------------------------------
 %% Helpers: gen_server implementation
@@ -106,8 +87,7 @@ init(Pid) ->
     {ok, Pid}.
 
 handle_call({sleep, Num}, _From, State) ->
-    timer:sleep(Num),
-    {reply, ok, State}.
+    {reply, timer:sleep(Num), State}.
 
 handle_cast(_Req, _State) ->
     erlang:error(notsup).
@@ -117,32 +97,21 @@ start_link() ->
     Pid.
 
 %%--------------------------------------------------------------------
-%% helper functions
-capture_io(Fun) ->
-    ok = ct:capture_start(),
-    Fun(),
-    ok = ct:capture_stop(),
-    lists:flatten(ct:capture_get()).
-
-%%--------------------------------------------------------------------
 %% TEST CASES
-%% Permutations:
-%% Config permutations:
-%%  -init
-%%  -done
-%%  -init_worker
-%%  -concurrency
-%%  -samples
-%%  -warmup
-%%  -interval
 
 mfa(Config) when is_list(Config) ->
     C = erlperf:run(timer, sleep, [1]),
     ?assert(C > 250 andalso C < 1101),
-    Time = erlperf:time({timer, sleep, [1]}, 100),
-    ?assert(Time > 100000 andalso Time < 300000). %% between 100 and 300 ms
+    %% extended report
+    Extended = erlperf:run({timer, sleep, [1]}, #{report => extended, sample_duration => 100}),
+    [?assert(Cs > 25 andalso Cs < 110) || Cs <- Extended],
+    %% full report
+    #{result := Result} = erlperf:run({timer, sleep, [1]}, #{report => full, sample_duration => 100}),
+    #{average := Avg} = Result,
+    ?assert(Avg > 25 andalso Avg < 110).
 
 mfa_with_cv(Config) when is_list(Config) ->
+    %% basic report
     C = erlperf:run({timer, sleep, [1]}, #{cv => 0.05}),
     ?assert(C > 250 andalso C < 1101).
 
@@ -154,61 +123,21 @@ mfa_with_tiny_cv(Config) when is_list(Config) ->
     C = erlperf:run({timer, sleep, [1]}, #{samples => 2, interval => 100, cv => 0.002}),
     ?assert(C > 250 andalso C < 1101).
 
-mfa_list(Config) when is_list(Config) ->
-    C = erlperf:run([{rand, seed, [exrop]}, {timer, sleep, [1]}, {rand, uniform, [20]}, {timer, sleep, [1]}]),
-    ?assert(C > 200 andalso C < 450, {out_of_range, C, 200, 450}).
-
-mfa_fun(Config) when is_list(Config) ->
-    C = erlperf:run(fun () -> timer:sleep(1) end),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-mfa_fun1(Config) when is_list(Config) ->
-    C = erlperf:run(#{runner => fun (undefined) -> timer:sleep(1); (ok) -> timer:sleep(1) end,
-        init_runner => fun() -> undefined end}),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-code(Config) when is_list(Config) ->
-    C = erlperf:run("timer:sleep(1)."),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-code_fun(Config) when is_list(Config) ->
-    C = erlperf:run("runner() -> timer:sleep(1)."),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-code_fun1(Config) when is_list(Config) ->
-    C = erlperf:run(#{runner => "runner(undefined) -> timer:sleep(1), undefined.",
-        init_runner => "undefined."}),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-mfa_init(Config) when is_list(Config) ->
-    C = erlperf:run(#{
-        runner => fun (1) -> timer:sleep(1) end,
-        init => [{rand, seed, [exrop]}, {rand, uniform, [100]}],
-        init_runner => {erlang, abs, [-1]}
-    }),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-mfa_fun_init(Config) when is_list(Config) ->
-    C = erlperf:run(#{
-        runner => fun(Timeout) -> timer:sleep(Timeout) end,
-        init => fun () -> ok end,
-        init_runner => fun (ok) -> 1 end
-    }),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
-code_gen_server(Config) when is_list(Config) ->
-    C = erlperf:run(#{
-        runner => "run(Pid) -> gen_server:call(Pid, {sleep, 1}).",
-        init => "Pid = " ++ atom_to_list(?MODULE) ++ ":start_link(), register(server, Pid), Pid.",
-        init_runner => "local(Pid) when is_pid(Pid) -> Pid.",
-        done => "stop(Pid) -> gen_server:stop(Pid)."
-    }),
-    ?assertEqual(undefined, whereis(server)),
-    ?assert(C > 250 andalso C < 1101, {out_of_range, C, 250, 1101}).
-
 mfa_concurrency(Config) when is_list(Config) ->
     C = erlperf:run({timer, sleep, [1]}, #{concurrency => 2}),
     ?assert(C > 500 andalso C < 2202, {out_of_range, C, 500, 2202}).
+
+compare(Config) when is_list(Config) ->
+    [C1, C2] = erlperf:compare(["timer:sleep(1).", "timer:sleep(2)."],
+        #{sample_duration => 100, report => extended}),
+    ?assertEqual(3, length(C1), {not_extended, C1}),
+    [?assert(L > R, {left, C1, right, C2}) || {L, R} <- lists:zip(C1, C2)],
+    %% low-overhead comparison benchmark
+    %% LEGACY/DEPRECATED: for timed mode, extended report has only 1 sample
+    [[T1], [T2]] = erlperf:benchmark([#{runner => {timer, sleep, [1]}}, #{runner => "timer:sleep(2)."}],
+        #{sample_duration => undefined, samples => 50, report => extended}, undefined),
+    ?assert(is_integer(T1) andalso is_integer(T2)),
+    ?assert(T1 < T2, {T1, T2}).
 
 mfa_no_concurrency(Config) when is_list(Config) ->
     C = erlperf:run(
@@ -227,9 +156,72 @@ code_extra_node(Config) when is_list(Config) ->
             init => "application:set_env(kernel, test, 1)."
         },
         #{concurrency => 2, sample_duration => 100, isolation => #{}}),
-    ?assertEqual(undefined, application:get_env(kernel, test)),
-    ct:pal("~p", [C]),
+    ?assertEqual(undefined, application:get_env(kernel, test), {"isolation did not work"}),
     ?assert(C > 50 andalso C < 220, {out_of_range, C, 50, 220}).
+
+%%--------------------------------------------------------------------
+%% timed mode
+
+mfa_timed(Config) when is_list(Config) ->
+    %% basic report for 100 'timer:sleep(1) iterations'
+    Time = erlperf:time({timer, sleep, [1]}, 100),
+    ?assert(Time > 100 andalso Time < 300, {actual, Time}), %% between 100 and 300 ms
+    %% extended report for 50 iterations
+    Times = erlperf:run({timer, sleep, [1]}, #{samples => 5, report => extended, sample_duration => {timed, 50}}),
+    ?assertEqual(5, length(Times), {times, Times}),
+    [?assert(T > 50 andalso T < 150, {actual, T}) || T <- Times], %% every run between 50 and 150 ms.
+    %% full report for 50 iterations
+    Full = erlperf:run({timer, sleep, [1]}, #{samples => 5, report => full, sample_duration => {timed, 50}}),
+    #{result := #{average := Avg, samples := FullSsamples}} = Full,
+    ?assertEqual(5, length(FullSsamples)),
+    ?assert(Avg > 50000.0 andalso Avg < 150000.0, {actual, Avg}), %% average run between 50 and 150 us (!us!)
+    %% ensure 'warmup' is supported for timed runs
+    Now = os:system_time(millisecond),
+    Warmup = erlperf:run({timer, sleep, [1]}, #{samples => 5, warmup => 10, sample_duration => {timed, 50}}),
+    ?assert(Warmup > 50 andalso Warmup < 150, {actual, Warmup}), %% between 50 and 150 ms
+    Elapsed = os:system_time(millisecond) - Now,
+    ?assert(Elapsed > 750, {warmup_missing, Elapsed}),
+    ?assert(Elapsed < 3000, {warmup_slow, Elapsed}).
+
+%%--------------------------------------------------------------------
+%% concurrency estimation test cases
+
+mfa_squeeze() ->
+    [{doc, "Tests concurrency estimation mode with basic report"}].
+
+mfa_squeeze(Config) when is_list(Config) ->
+    Scheds = erlang:system_info(schedulers_online),
+    {QPS, CPU} = erlperf:run({rand, uniform, [1]}, #{sample_duration => 50}, #{}),
+    ?assert(QPS > 0),
+    ?assert(CPU > 1, {schedulers, Scheds, detected, CPU}).
+
+squeeze_extended() ->
+    [{doc, "Tests concurrency estimation mode with extended report"}].
+
+squeeze_extended(Config) when is_list(Config) ->
+    {{QPS, CPU}, History} = erlperf:run({rand, uniform, [1]},
+        #{sample_duration => 50, warmup => 1, report => extended}, #{}),
+    %% find the best historical result, and ensure it's 3 steps away from the last
+    [Best | _] = lists:reverse(lists:keysort(1, History)),
+    ?assertEqual({QPS, CPU}, Best),
+    ?assertEqual(Best, lists:nth(4, History), History).
+
+squeeze_full() ->
+    [{doc, "Tests concurrency estimation mode with full report"}].
+
+squeeze_full(Config) when is_list(Config) ->
+    Report = erlperf:run({rand, uniform, [1]}, #{sample_duration => 50, warmup => 1, report => full}, #{}),
+    #{mode := concurrency, result := Best, history := History, sleep := sleep,
+        run_options := #{concurrency := Concurrency}} = Report,
+    #{time := Time} = Best,
+    ct:pal("Best run took ~b ms,~n~p", [Time div 1000, Best]),
+    %% taking 3 samples
+    ?assert(Time >= 3 * 50000, {too_fast, Time}),
+    ?assert(Time < 3 * 100000, {too_slow, Time}),
+    ?assertEqual({Concurrency, Best}, lists:nth(4, History)).
+
+%%--------------------------------------------------------------------
+%% error handling test cases
 
 crasher() ->
     [{doc, "Tests job that crashes"}].
@@ -238,31 +230,12 @@ crasher(Config) when is_list(Config) ->
     ?assertException(error, {benchmark, {'EXIT', _, _}},
         erlperf:run({erlang, throw, [ball]}, #{concurrency => 2})).
 
-mixed() ->
-    [{doc, "Tests mixed approach when code co-exists with MFAs"}].
-
-mixed(Config) when is_list(Config) ->
-    C = erlperf:run(#{
-        runner => [{timer, sleep, [1]}, {timer, sleep, [2]}],
-        init => "rand:uniform().",
-        init_runner => fun (Int) -> Int end
-    }),
-    ?assert(C > 100 andalso C < 335, {out_of_range, C, 100, 335}).
-
 undefer() ->
     [{doc, "Tests job undefs - e.g. wrong module name"}].
 
 undefer(Config) when is_list(Config) ->
     ?assertException(error, {benchmark, {'EXIT', _, {undef, _}}},
         erlperf:run({'$cannot_be_this', throw, []}, #{concurrency => 2})).
-
-compare(Config) when is_list(Config) ->
-    [C1, C2] = erlperf:compare(["timer:sleep(1).", "timer:sleep(2)."], #{sample_duration => 100}),
-    ?assert(C1 > C2),
-    %% low-overhead comparison benchmark
-    [T1, T2] = erlperf:benchmark([#{runner => {timer, sleep, [1]}}, #{runner => "timer:sleep(2)."}],
-        #{sample_duration => undefined, samples => 50}, undefined),
-    ?assert(T1 < T2).
 
 errors() ->
     [{doc, "Tests various error conditions"}].
@@ -275,233 +248,88 @@ errors(Config) when is_list(Config) ->
     ?assertException(error, {generate, {parse, runner, _}},
         erlperf:run(#{runner => {[]}})).
 
-mfa_squeeze() ->
-    [{timetrap, {seconds, 120}}].
+%%--------------------------------------------------------------------
+%% timer skew detection
 
-mfa_squeeze(Config) when is_list(Config) ->
-    case erlang:system_info(schedulers_online) of
-        LowCPU when LowCPU < 3 ->
-            skip;
-        HaveCPU ->
-            {QPS, CPU} = erlperf:run({rand, uniform, [1]}, #{sample_duration => 50, warmup => 1}, #{}),
-            ct:pal("Schedulers: ~b, detected: ~p, QPS: ~p", [HaveCPU, CPU, QPS]),
-            ?assert(QPS > 0),
-            ?assert(CPU > 1)
-    end.
-
-overhead_benchmark() ->
+lock_contention() ->
     [{doc, "Ensures that benchmarking overhead when running multiple concurrent processes is not too high"},
         {timetrap, {seconds, 20}}].
 
-overhead_benchmark(Config) when is_list(Config) ->
-    Init = fun() -> ets:new(tab, [public, named_table]) end,
-    Done = fun(Tab) -> ets:delete(Tab) end,
-    Runner = fun() -> true = ets:insert(tab, {key, value}) end, %% this inevitably causes lock contention
-    %% take 10 samples of 100 ms, which should complete in about a second, or at least less than two
-    %% extra 3 samples of 100 ms are taken for 'warmup' cycles, to calibrate the sleep/4 function, that
-    %% is expected to switch into busy_wait mode.
-    Before = os:system_time(millisecond),
-    QPS = erlperf:run(#{runner => Runner, init => Init, done => Done},
-        #{concurrency => 50, samples => 10, sample_duration => 100, warmup => 3}),
-    TimeSpent = os:system_time(millisecond) - Before,
-    ?assert(QPS > 0, {qps, QPS}),
-    ?assert(TimeSpent > 500, {too_quick, TimeSpent, expected, 1000}),
-    ?assert(TimeSpent < 2000, {too_slow, TimeSpent, expected, 1000}).
-
-%%--------------------------------------------------------------------
-%% command-line testing
-
-parse_qps(QPST, "") -> list_to_integer(QPST);
-parse_qps(QPST, "Ki") -> list_to_integer(QPST) * 1000;
-parse_qps(QPST, "Mi") -> list_to_integer(QPST) * 1000000;
-parse_qps(QPST, "Gi") -> list_to_integer(QPST) * 1000000000.
-
-parse_duration(TT, "ns") -> list_to_integer(TT) div 1000;
-parse_duration(TT, "us") -> list_to_integer(TT);
-parse_duration(TT, "ms") -> list_to_integer(TT) * 1000;
-parse_duration(TT, "s") -> list_to_integer(TT) * 1000000.
-
-filtersplit(Str, Sep) ->
-    [L || L <- string:split(Str, Sep, all), L =/= ""].
-
-parse_out(Out) ->
-    [Header | Lines] = filtersplit(Out, "\n"),
-    case filtersplit(Header, " ") of
-        ["Code", "||", "QPS", "Time"] ->
-            [begin
-                 case filtersplit(Ln, " ") of
-                     [Code, ConcT, QPST, TT, TTU] ->
-                         {Code, list_to_integer(ConcT), parse_qps(QPST, ""), parse_duration(TT, TTU)};
-                     [Code, ConcT, QPST, QU, TT, TTU] ->
-                         {Code, list_to_integer(ConcT), parse_qps(QPST, QU), parse_duration(TT, TTU)}
-                 end
-             end || Ln <- Lines];
-        ["Code", "||", "QPS", "Time", "Rel"] ->
-            [begin
-                 case filtersplit(Ln, " ") of
-                     [Code, ConcT, QPST, TT, TTU, Rel] ->
-                         {Code, list_to_integer(ConcT), parse_qps(QPST, ""), parse_duration(TT, TTU),
-                             list_to_integer(lists:droplast(Rel))};
-                     [Code, ConcT, QPST, QU, TT, TTU, Rel] ->
-                         {Code, list_to_integer(ConcT), parse_qps(QPST, QU), parse_duration(TT, TTU),
-                             list_to_integer(lists:droplast(Rel))}
-                 end
-             end || Ln <- Lines];
-        _BadRet ->
-            ct:pal(Out),
-            ?assert(false)
+lock_contention(Config) when is_list(Config) ->
+    %% need at the very least 4 schedulers to create enough contention
+    case erlang:system_info(schedulers_online) of
+        Enough when Enough >= 4 ->
+            Init = fun() -> ets:new(tab, [public, named_table]) end,
+            Done = fun(Tab) -> ets:delete(Tab) end,
+            Runner = fun() -> true = ets:insert(tab, {key, value}) end, %% this inevitably causes lock contention
+            %% take 50 samples of 10 ms, which should complete in about a second, and 10 extra warmup samples
+            %% hoping that lock contention is detected at warmup
+            Before = os:system_time(millisecond),
+            Report = erlperf:run(#{runner => Runner, init => Init, done => Done},
+                #{concurrency => 50, samples => 50, sample_duration => 10, warmup => 10, report => full}),
+            #{result := #{average := QPS}, sleep := busy_wait} = Report,
+            TimeSpent = os:system_time(millisecond) - Before,
+            ?assert(QPS > 0, {qps, QPS}),
+            ?assert(TimeSpent > 500, {too_quick, TimeSpent, expected, 1000}),
+            ?assert(TimeSpent < 2000, {too_slow, TimeSpent, expected, 1000});
+        NotEnough ->
+            {skip, {not_enough_schedulers_online, NotEnough}}
     end.
 
-% erlperf 'timer:sleep(1). -d 100'
-cmd_line_simple(Config) when is_list(Config) ->
-    Code = "timer:sleep(1).",
-    Out = capture_io(fun() -> erlperf_cli:main([Code, "-d", "100"]) end),
-    [{Code, 1, C, T}] = parse_out(Out),
-    ?assert(C > 25 andalso C < 110, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+%%--------------------------------------------------------------------
+%% statistics
 
-% erlperf 'timer:sleep(1). -v'
-cmd_line_verbose(Config) when is_list(Config) ->
-    Code = "timer:sleep(1).",
-    Out = capture_io(fun () -> erlperf_cli:main([Code, "-v"]) end),
-    Lines = filtersplit(Out, "\n"),
-    %% TODO: actually verify that stuff printed is monitoring stuff
-    ?assert(length(Lines) > 3),
-    %% parse last 2 lines
-    [{Code, 1, C, T}] = parse_out(lists:join("\n", lists:sublist(Lines, length(Lines) - 1, 2))),
-    ?assert(C > 250 andalso C < 1101, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+%% simplified delta-comparison
+-define(assertApprox(Expect, Expr),
+    begin
+        ((fun () ->
+            X__X = (Expect),
+            X__Y = (Expr),
+            case (erlang:abs(X__Y - X__X) < 0.0001) of
+                true -> ok;
+                false -> erlang:error({assertEqual,
+                    [{module, ?MODULE},
+                        {line, ?LINE},
+                        {expression, (??Expr)},
+                        {expected, X__X},
+                        {value, X__Y}]})
+            end
+          end)())
+    end).
 
-% erlperf 'timer:sleep(1).' 'timer:sleep(2).' -d 100 -s 5 -w 1 -c 2
-cmd_line_compare(Config) when is_list(Config) ->
-    Out = capture_io(
-        fun () -> erlperf_cli:main(["timer:sleep(1).", "timer:sleep(2).", "-s", "5", "-d", "100", "-w", "1", "-c", "2"]) end),
-    % Code            Concurrency   Throughput      Time      Rel
-    % timer:sleep().            2          950    100 ns     100%
-    % timer:sleep(2).           2          475    200 ns      50%
-    [{_Code, 2, C, T, R}, {_Code2, 2, C2, T2, R2}] = parse_out(Out),
-    ?assert(C > 66 andalso C < 220, {qps, C}),
-    ?assert(C2 > 50 andalso C2 < 110, {qps, C2}),
-    ?assert(T < T2),
-    ?assert(R > R2).
+stat_calc() ->
+    [{doc, "Tests correctness of statistical calculations over samples"}].
 
-cmd_line_squeeze() ->
-    [{doc, "Tests concurrency test via command line"}, {timetrap, {seconds, 30}}].
+stat_calc(Config) when is_list(Config) ->
+    %% generate with: [erlang:round(rand:normal(40, 100)) || _ <- lists:seq(1, 30)].
+    Sample = [36,42,42,47,51,39,37,32,41,32,15,44,41,46,50,36,48,33,35,
+        35,25,21,47,40,33,57,55,64,40,30],
 
-% erlperf 'timer:sleep(1).' --sample_duration 50 --squeeze --min 2 --max 4 --threshold 2
-cmd_line_squeeze(Config) when is_list(Config) ->
-    Out = capture_io(
-        fun () -> erlperf_cli:main(["timer:sleep(1).", "--duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
-    [{_Code, 4, C, T}] = parse_out(Out),
-    ?assert(C > 50 andalso C < 220, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+    Stats = erlperf:report_stats(Sample),
 
-% erlperf -q
-cmd_line_usage(Config) when is_list(Config) ->
-    Out = capture_io(fun () -> erlperf_cli:main(["-q"]) end),
-    Line1 = "Error: erlperf: required argument missing: code",
-    ?assertEqual(Line1, lists:sublist(Out, length(Line1))),
-    Out2 = capture_io(fun () -> erlperf_cli:main(["--un code"]) end),
-    ?assertEqual("Error: erlperf: unrecognised argument: --un code", lists:sublist(Out2, 48)),
-    ok.
+    ?assertApprox(39.8, maps:get(average, Stats)),
+    %% ?assertApprox(109.0620, maps:get(variance, Stats)),
+    ?assertApprox(10.4432, maps:get(stddev, Stats)),
+    ?assertEqual(40, maps:get(median, Stats)),
+    ?assertEqual(15, maps:get(min, Stats)),
+    ?assertEqual(64, maps:get(max, Stats)),
+    %% ?assertApprox(47, maps:get({percentile, 0.75}, Stats)),
+    ?assertApprox(64, maps:get(p99, Stats)).
 
-% erlperf '{file,_}=code:is_loaded(pool).' --init 'code:ensure_loaded(pool).' --done 'code:purge(pool), code:delete(pool).'
-cmd_line_init(Config) when is_list(Config) ->
-    Code = "{file,_}=code:is_loaded(pool).",
-    Out = capture_io(fun () -> erlperf_cli:main(
-        [Code, "--init", "code:ensure_loaded(pool).", "--done", "code:purge(pool), code:delete(pool)."])
-                                  end),
-    % verify 'done' was done
-    ?assertEqual(false, code:is_loaded(pool)),
-    % verify output
-    [{_Code, 1, C, T}] = parse_out(Out),
-    ?assert(C > 50, {qps, C}),
-    ?assert(T > 0, {time, T}).
+rand_stat() ->
+    [{doc, "Use rand module to generate some wildly random results"}].
 
-% erlperf 'runner(X) -> timer:sleep(X).' --init '1.' 'runner(Y) -> timer:sleep(Y).' --init '2.' -s 2 --duration 100
-cmd_line_double(Config) when is_list(Config) ->
-    Code = "runner(X)->timer:sleep(X).",
-    Out = capture_io(fun () -> erlperf_cli:main([Code, "--init_runner", "1.", Code, "--init_runner", "2.", "-s", "2",
-        "--duration", "100"]) end),
-    [{Code, 1, C, T, R}, {Code, 1, C2, T2, R2}] = parse_out(Out),
-    ?assert(C > 25 andalso C < 110, {qps, C}),
-    ?assert(C2 > 25 andalso C2 < 55, {qps, C2}),
-    ?assert(T < T2),
-    ?assert(R > R2).
-
-cmd_line_triple(Config) when is_list(Config) ->
-    Out = capture_io(fun () -> erlperf_cli:main(["timer:sleep(1).", "-s", "2", "--duration", "100",
-        "timer:sleep(2).", "timer:sleep(3)."]) end),
-    [_, _, {_, 1, C3, _T3, R3}] = parse_out(Out),
-    ?assert(C3 > 20 andalso C3 < 30, {"expected between 20 and 30, got", C3}),
-    ?assert(R3 > 40 andalso R3 < 60, {"expected between 40 and 60, got", R3}),
-    ok.
-
-% erlperf 'runner(Arg) -> ok = pg:join(Arg, self()), ok = pg:leave(Arg, self()).' --init_runner 'pg:create(self()), self().'
-cmd_line_pg(Config) when is_list(Config) ->
-    ?assertEqual(undefined, whereis(scope)), %% ensure scope is not left
-    Code = "runner(S)->pg:join(S,g,self()),pg:leave(S,g,self()).",
-    Out = capture_io(fun () -> erlperf_cli:main(
-        [Code, "--init_runner", "{ok,Scope}=pg:start_link(scope),Scope."])
-                                  end),
-    ?assertEqual(undefined, whereis(scope)), %% ensure runner exited
-    [{_Code, 1, C, _T}] = parse_out(Out),
-    ?assert(C > 100, {qps, C}).
-
-% erlperf '{rand, uniform, [4]}'
-cmd_line_mfa(Config) when is_list(Config) ->
-    Code = "{rand,uniform,[4]}",
-    Out = capture_io(fun () -> erlperf_cli:main([Code]) end),
-    [{Code, 1, _C, _T}] = parse_out(Out).
-
-% erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 'ets:file2tab("pg2.tab").'
-cmd_line_recorded(Config) ->
-    % write down ETS table to file
-    Priv = proplists:get_value(priv_dir, Config),
-    EtsFile = filename:join(Priv, "ets.tab"),
-    RecFile = filename:join(Priv, "recorded.list"),
-    test_ets_tab = ets:new(test_ets_tab, [named_table, public, ordered_set]),
-    [true = ets:insert(test_ets_tab, {N, rand:uniform(100)}) || N <- lists:seq(1, 100)],
-    ok = ets:tab2file(test_ets_tab, EtsFile),
-    true = ets:delete(test_ets_tab),
-    %
-    ok = file:write_file(RecFile, term_to_binary(
-        [
-            {ets, insert, [test_ets_tab, {100, 40}]},
-            {ets, delete, [test_ets_tab, 100]}
-        ])),
-    %
-    Out = capture_io(fun () -> erlperf_cli:main(
-        [RecFile, "--init", "ets:file2tab(\"" ++ EtsFile ++ "\")."])
-                                  end),
-    [LN1, LN2] = string:split(Out, "\n"),
-    ?assertEqual(["Code", "||", "QPS", "Time"], string:lexemes(LN1, " ")),
-    ?assertMatch(["[{ets,insert,[test_ets_tab,{100,40}]},", "...]", "1" | _], string:lexemes(LN2, " ")),
-    ok.
-
-cmd_line_all() ->
-    [{doc, "Test init_all, done_all, init_runner_all options "}].
-
-%% ./erlperf 'runner(X)->timer:sleep(X).' 'runner(X)->timer:sleep(X).' 'runner(X)->timer:sleep(X).'
-%%      --init_all '5.' --init '1.' --init_runner_all 'ir(Z) -> Z * 2.' --init_runner '5.' --init_runner '2.' --done_all '2.'
-cmd_line_all(Config) when is_list(Config) ->
-    Code = "runner(X)->timer:sleep(X).",
-    Code2 = "runner(Y)->timer:sleep(Y).",
-    %% how this test works:
-    %%  --init_all returns 5 for all 3 tests, for code#1 --init is overridden to be 1.
-    %%  --init_runner_all returns 2x of init result, but there is override for #1 and #2 returning 5 and 2
-    %%  resulting delays are 5, 2 and 10.
-    Out = capture_io(fun () -> erlperf_cli:main(
-        [Code, Code2, Code, "--init_all", "5.", "--init", "1.", "--init_runner_all", "ir(Z) -> Z * 2.",
-            "--init_runner", "5.", "--init_runner", "2.",
-            "--done_all", "2.", "-s", "2", "--duration", "100"]) end), %% unrelated parts to make the test quicker
-    [{Code2, 1, C1, _, R}, {Code, 1, C2, _, R2}, {Code, 1, C3, _, R3}] = parse_out(Out),
-    %% tests sorting as well
-    ?assert(C1 > 25 andalso C1 < 55, {qps, C1}), %% 2 ms delay
-    ?assert(C2 > 10 andalso C2 < 25, {qps, C2}), %% 5 ms delay
-    ?assert(C3 > 5 andalso C3 < 11, {qps, C3}), %% 10 ms delay
-    ?assert(R > R2), %% 5 ms delay is less than 2 ms
-    ?assert(R2 > R3). %% 5 ms delay is more than 10 ms
+rand_stat(Config) when is_list(Config) ->
+    Report = erlperf:run({rand, uniform, []}, #{report => full, samples => 100, sample_duration => 5}),
+    #{result := Result, mode := continuous, system := System} = Report,
+    #{min := Min, max := Max, average := Avg, median := Mid, p99 := P99} = Result,
+    %% just run some sanity checks assertions
+    ?assertEqual(erlang:system_info(os_type), maps:get(os, System)),
+    ?assert(is_map_key(cpu, System), {cpu_missing, System}),
+    ?assert(Min < Max, {min, Min, max, Max}),
+    ?assert(Avg > Min andalso Avg < Max, {avg, Avg, min, Min, max, Max}),
+    ?assert(Mid > Min andalso Mid < Max, {median, Mid, min, Min, max, Max}),
+    ?assert(P99 =< Max, {p99, P99, max, Max}).
 
 %%--------------------------------------------------------------------
 %% record-replay
