@@ -4,6 +4,29 @@
 %%%
 %%% Exports functions to format {@link erlperf:benchmark/3} output
 %%% in the same way as command line interface.
+%%%
+%%% Example:
+%%% ```
+%%% #!/usr/bin/env escript
+%%%  %%! +pc unicode -pa /home/max-au/git/max-au/erlperf/_build/default/lib/erlperf/ebin
+%%% -mode(compile).
+%%%
+%%% main(_) ->
+%%%     Report = erlperf:benchmark([
+%%%         #{runner => fun() -> rand:uniform(10) end},
+%%%         #{runner => {rand, mwc59, [1]}}
+%%%     ], #{report => full}, undefined),
+%%%     Out = erlperf_cli:format(Report, #{format => extended, viewport_width => 120}),
+%%%     io:format(Out),
+%%%     halt(0).
+%%% '''
+%%% Running the script produces following output:
+%%% ```
+%%% $ ./bench
+%%% Code                                                ||   Samples       Avg   StdDev    Median      P99  Iteration    Rel
+%%% {rand,mwc59,[1]}                                     1         3  80515 Ki    0.59%  80249 Ki 81067 Ki      12 ns   100%
+%%% #Fun<bench__escript__1674__432325__319865__16.0.     1         3  15761 Ki    0.48%  15726 Ki 15847 Ki      63 ns    20%
+%%% '''
 -module(erlperf_cli).
 -author("maximfca@gmail.com").
 
@@ -423,8 +446,12 @@ format_code(Code) when is_tuple(Code) ->
     lists:flatten(io_lib:format("~tp", [Code]));
 format_code(Code) when is_tuple(hd(Code)) ->
     lists:flatten(io_lib:format("[~tp, ...]", [hd(Code)]));
-format_code(Code) ->
-    Code.
+format_code(Code) when is_function(Code) ->
+    lists:flatten(io_lib:format("~tp", [Code]));
+format_code(Code) when is_list(Code) ->
+    Code;
+format_code(Code) when is_binary(Code) ->
+    binary_to_list(Code).
 
 format_system(#{os := OSType, system_version := SystemVsn} = System) ->
     OS = io_lib:format("OS : ~s~n", [format_os(OSType)]),
