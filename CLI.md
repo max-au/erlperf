@@ -20,7 +20,7 @@ erlperf [FLAG] runner [INIT] [INIT_RUNNER] [DONE] [runner...]
 |       | --max             | Maximum number of workers allowed in the concurrency estimation mode                                                                                             |
 |       | --min             | Starting number of workers in concurrency estimation mode                                                                                                        |
 | -pa   |                   | Adds extra code path to the Erlang VM. Useful for benchmarking *.beam files on your filesystem                                                                   |
-| -r    | --report          | Requests `basic`, `extended` or `full` report. Defaults to `basic` when less than 10 samples are requested                                                       |
+| -r    | --report          | Requests `basic`, `extended` or `full` report. Defaults to `basic` when less than 10 samples are requested, and `extended` for 10 and more                       |
 | -q    | -squeeze          | Engages concurrency estimation mode                                                                                                                              |
 | -t    | -threshold        | Sets number of extra workers to try in concurrency estimation mode before concluding the test                                                                    |
 | -v    | --verbose         | Turns on verbose logging (VM statistics and performance of continuous jobs)                                                                                      |
