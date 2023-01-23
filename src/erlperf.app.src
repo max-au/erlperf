@@ -15,5 +15,6 @@
   {modules, []},
 
   {licenses, ["BSD-3-Clause-Clear"]},
-  {links, [{"Github", "https://github.com/max-au/erlperf"}]}
+  {links, [{"Github", "https://github.com/max-au/erlperf"}]},
+  {include_paths, ["CLI.md", "DETAILS.md"]}
  ]}.
