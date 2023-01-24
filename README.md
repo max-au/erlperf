@@ -16,8 +16,8 @@ Build (tested with OTP 23, 24, 25):
 Beware of the shell escaping your code in an unpredictable way!
 
 1. Run a single process iterating `rand:uniform()` in a tight loop for 3 seconds,
-printing **average iterations per second** (~14 millions) and an average time
-to run a single iteration (71 ns).
+printing **average iterations per second** (~17 millions) and an average time
+to run a single iteration (57 ns).
 
 ```bash
     $ ./erlperf 'rand:uniform().'
@@ -98,8 +98,8 @@ or older, as pg2 is removed in later versions).
     ok = pg2:join(g, self()), ok = pg2:leave(g, self()).          1      64021   15619 ns
 ```
 
-9. Compare `pg` with `pg2` running two nodes (note the `-i` argument spawning an isolated extra node to
-run benchmark in):
+9. Compare `pg` with `pg2` running in a 3-node cluster. Note the `-i` argument spawning an isolated
+extra Erlang VM for each benchmark.
 
 ```bash
     ./erlperf 'ok = pg2:join(g, self()), ok = pg2:leave(g, self()).' --init 'pg2:create(g).' \
@@ -143,8 +143,8 @@ it took in timed mode.
 The process repeats until the specified amount of *samples* is collected, producing
 a **report** (see details below).
 
-For comparison convenience, basic reports contain a **QPS** - historical metric
-from original implementation (designed for network service throughput assessment).
+For comparison convenience, basic reports contain **QPS** - historical metric
+from the original implementation (designed for network service throughput assessment).
 It is approximate amount of *runner iterations per sample_duration achieved by all workers
 of the job*. Given that default duration is 1 second, *QPS* is a good proxy for
 the total job throughput.
@@ -190,7 +190,7 @@ Absolute benchmarking overhead may be significant for very fast functions taking
 Use timed mode for such occasions.
 
 ### Run options
-See `erlperf` module documentation and and [command line reference](CLI.md) for all available options.
+See `erlperf` module documentation and [command line reference](cli.html) for all available options.
 
 ## Benchmarking modes
 
@@ -201,7 +201,7 @@ a specified period of time (**sample_duration**).
 Two examples below demonstrate the effect caused by changing *sample_duration*.
 First run takes 20 samples (`-s 20`) with 100 ms duration. Second invocation
 takes the same 20 sample, but with 200 ms duration (`-d 200`). Note that all metrics,
-except a single *iteration* time, have doubled.
+except a single *iteration* time, doubled.
 
 ```bash
     $ ./erlperf 'rand:uniform().' -d 100 -s 20
@@ -270,10 +270,10 @@ Use `-r basic` to force basic reports with 10 and more samples.
 
 Basic report contains following columns:
  * **Code**: Erlang code supplied to the benchmark
- * **||**: how many concurrent processes were running. In timed mode, it is always 1. In concurrency
+ * **||**: how many concurrent processes were running. In the timed mode, it is always 1. In the concurrency
    estimation mode, the number that achieved the highest total throughput (QPS)
  * **QPS**: average number of runner code *iterations* (throughput). Measure per single *sample_duration*
-      in continuous mode. In timed mode, calculated with the assumption that *sample_duration* is 1 second
+      in the continuous mode. In the timed mode, calculated with the assumption that *sample_duration* is 1 second
  * **Time**: single runner iteration time
  * **Rel**: relative performance of this code, compared to others. Printed only when more than
    one runner is specified.
@@ -290,9 +290,9 @@ displays average time it takes to do 10M iterations. Single iteration time is pr
 Code, concurrency, and relative performance fields have the same meaning as in basic report. In addition,
 following columns are printed:
  * **Samples**: how many samples were collected (useful when requesting continuous test with standard deviation requirement)
- * **Avg**: same as QPS for continuous mode, but in timed mode, average sample time
+ * **Avg**: same as QPS for continuous mode, but in the timed mode, average sample time
  * **StdDev**: standard deviation from average
- * **Median**: median value, in continuous mode, median estimated throughput, in timed mode - time to
+ * **Median**: median value, in the continuous mode, median estimated throughput, in the timed mode - time to
  complete the requested iterations
  * **Iteration**: single runner iteration time
  * **P99**: 99th percentile
