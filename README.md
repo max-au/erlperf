@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/max-au/erlperf/actions/workflows/erlang.yml/badge.svg?branch=master)](https://github.com/max-au/erlperf/actions) [![Hex.pm](https://img.shields.io/hexpm/v/erlperf.svg)](https://hex.pm/packages/erlperf) [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/erlperf)
 
 Erlang Performance & Benchmarking Suite.
-Simple way to say "this code is faster than that one". See [CLI reference](cli.html)
+Simple way to say "this code is faster than that one". See [CLI reference](CLI.md)
 and detailed API reference for `erlperf` and `erlperf_job` modules.
 
 Build (tested with OTP 23, 24, 25):
@@ -190,7 +190,7 @@ Absolute benchmarking overhead may be significant for very fast functions taking
 Use timed mode for such occasions.
 
 ### Run options
-See `erlperf` module documentation and [command line reference](cli.html) for all available options.
+See `erlperf` module documentation and [command line reference](CLI.md) for all available options.
 
 ## Benchmarking modes
 
