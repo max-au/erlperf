@@ -4,7 +4,7 @@
 
 Erlang Performance & Benchmarking Suite.
 Simple way to say "this code is faster than that one". See [CLI reference](cli.html)
-and detailed API reference for `erlperf` and `erlperf_job` modules. 
+and detailed API reference for `erlperf` and `erlperf_job` modules.
 
 Build (tested with OTP 23, 24, 25):
 
@@ -63,7 +63,7 @@ squeeze a bit more from a single process by putting work into the queue from mul
     $ ./erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).' --squeeze
     Code                               ||        QPS       Time
     code:is_loaded(local_udp).          4     969 Ki    4129 ns
-    
+
     $ ./erlperf 'persistent_term:put(atom, "string").' -q
     Code                                         ||        QPS       Time
     persistent_term:put(atom, "string").          1    8882 Ki     112 ns
@@ -88,7 +88,7 @@ of adding extra spaces in the source code to know which code is where.
     runner(X) -> timer:sleep(X).            1        500    2001 us  100%
       runner(X) -> timer:sleep(X).          1        333    3001 us   67%
 ```
-    
+
 8. Determine how many times a process can join/leave pg2 group on a single node (requires OTP 23
 or older, as pg2 is removed in later versions).
 
@@ -116,7 +116,7 @@ does not increase total throughput.
 
 ```bash
     $ ./erlperf 'rand:uniform().' -q -v -t 8
-    
+
     YYYY-MM-DDTHH:MM:SS-oo:oo  Sched   DCPU    DIO    Procs    Ports     ETS Mem Total  Mem Proc   Mem Bin   Mem ETS     <0.84.0>
     2023-01-22T11:02:51-08:00   6.12   0.00   0.20       46        2      21  24737 Kb   4703 Kb    191 Kb    471 Kb     14798 Ki
     2023-01-22T11:02:52-08:00   6.31   0.00   0.00       46        2      21  25105 Kb   5565 Kb    218 Kb    472 Kb     16720 Ki
@@ -150,7 +150,7 @@ of the job*. Given that default duration is 1 second, *QPS* is a good proxy for
 the total job throughput.
 
 Single worker performance can be estimated using **time** metric. It can also be
-considered as function latency - how long it takes on average to execute a 
+considered as function latency - how long it takes on average to execute a
 single *iteration* of a *runner*.
 
 ### Benchmark definition
@@ -175,9 +175,9 @@ This difference may get more pronounced depending on ERTS version and *runner* c
 
 ```erlang
     (erlperf@max-au)7> erlperf:benchmark([
-            #{runner => "runner(X) -> is_float(X).", init_runner=>"2."}, 
+            #{runner => "runner(X) -> is_float(X).", init_runner=>"2."},
             #{runner => {erlang, is_float, [2]}},
-            #{runner => fun (X) -> is_float(X) end, init_runner => "2."}], 
+            #{runner => fun (X) -> is_float(X) end, init_runner => "2."}],
         #{}, undefined).
     [105824351,66424280,5057372]
 ```
@@ -333,8 +333,8 @@ Add `erlperf` as a dependency, and use remote shell:
 ```
 
 ### Permanent continuous benchmarking
-You can run a job continuously, to examine performance gains or losses while doing 
-hot code reload. This process is designed to help during development and testing stages, 
+You can run a job continuously, to examine performance gains or losses while doing
+hot code reload. This process is designed to help during development and testing stages,
 allowing to quickly notice performance regressions.
 
 Example source code:
@@ -343,31 +343,31 @@ Example source code:
     -export([do/1]).
     do(Arg) -> timer:sleep(Arg).
 ```
- 
+
 Example below assumes you have `erlperf` application started (e.g. in a `rebar3 shell`)
 
 ```erlang
     % start a logger that prints VM monitoring information
     > {ok, Logger} = erlperf_file_log:start_link().
     {ok,<0.235.0>}
-    
+
     % start a job that will continuously benchmark mymod:do(),
     %  with initial concurrency 2.
-    > JobPid = erlperf:start(#{init_runner => "rand:uniform(10).", 
+    > JobPid = erlperf:start(#{init_runner => "rand:uniform(10).",
         runner => "runner(Arg) -> mymod:do(Arg)."}, 2).
     {ok,<0.291.0>}
-    
+
     % increase concurrency to 4
     > erlperf_job:set_concurrency(JobPid, 4).
     ok.
-    
+
     % watch your job performance
 
-    % modify your application code, 
+    % modify your application code,
     % set do(Arg) -> timer:sleep(2*Arg), do hot code reload
     > c(mymod).
     {module, mymod}.
-    
+
     % see that after hot code reload throughput halved!
 ```
 
@@ -405,7 +405,7 @@ It's possible to run a job on a separate node in the cluster. See
     {ok,<0.213.0>}
     (node1@host)> {ok, ClusterLogger} = erlperf_cluster_monitor:start_link(group_leader(), 1000, [node, sched_util, jobs]).
     {ok, <0.216.0>}
-    
+
     % also log cluster-wide reports to file (jobs & sched_util)
     (node1@host)> {ok, FileLogger} = erlperf_cluster_monitor:start_link("/tmp/cluster", 1000, [time, node, sched_util, jobs]).
     {ok, <0.223.0>}
