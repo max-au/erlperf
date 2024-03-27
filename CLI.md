@@ -34,7 +34,7 @@ Initialisation and cleanup definitions are read in the same order as runner code
 ```bash
 # first runner receives 1 as input, second - 2
 erlperf --init_runner '1.' 'run(1) -> ok.' 'run(2) -> ok.' --init_runner '2.'
-# next run fails with function_clause, because first runner receives '2', and secdond - 1
+# next run fails with function_clause, because first runner receives '2', and second - 1
 erlperf --init_runner '2.' 'run(1) -> ok.' 'run(2) -> ok.' --init_runner '1.' 
 ```
 

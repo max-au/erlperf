@@ -202,7 +202,8 @@
 %%       worker process, so you can initialise process-local values (e.g.
 %%       process dictionary)</li>
 %%   <li>`runner/0,1,2' defines the function that will be called in a tight loop.
-%%       See detailed description below</li>
+%%       See <a href="#module-runner-function">Runner Function</a> for
+%%       overview of a runner function variants.</li>
 %%   <li>`done/0,1' - called when the job terminates, to clean up any resources
 %%       that are not destroyed automatically. done/0 accepts the return of init/0.
 %%       Call is made in the context of the job controller</li>
