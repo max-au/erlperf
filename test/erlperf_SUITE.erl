@@ -259,9 +259,10 @@ lock_contention(Config) when is_list(Config) ->
     %% need at the very least 4 schedulers to create enough contention
     case erlang:system_info(schedulers_online) of
         Enough when Enough >= 4 ->
+            Tuple = {lists:seq(1, 30), lists:seq(1, 100)},
             Init = fun() -> ets:new(tab, [public, named_table]) end,
             Done = fun(Tab) -> ets:delete(Tab) end,
-            Runner = fun() -> true = ets:insert(tab, {key, value}) end, %% this inevitably causes lock contention
+            Runner = fun() -> true = ets:insert(tab, Tuple) end, %% this inevitably causes lock contention
             %% take 50 samples of 10 ms, which should complete in about a second, and 10 extra warmup samples
             %% hoping that lock contention is detected at warmup
             Before = os:system_time(millisecond),
