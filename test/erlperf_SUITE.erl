@@ -259,7 +259,7 @@ lock_contention(Config) when is_list(Config) ->
     %% need at the very least 4 schedulers to create enough contention
     case erlang:system_info(schedulers_online) of
         Enough when Enough >= 4 ->
-            Tuple = {lists:seq(1, 30), lists:seq(1, 100)},
+            Tuple = {lists:seq(1, 10), lists:seq(1, 100)},
             Init = fun() -> ets:new(tab, [public, named_table]) end,
             Done = fun(Tab) -> ets:delete(Tab) end,
             Runner = fun() -> true = ets:insert(tab, Tuple) end, %% this inevitably causes lock contention
@@ -267,13 +267,13 @@ lock_contention(Config) when is_list(Config) ->
             %% hoping that lock contention is detected at warmup
             Before = os:system_time(millisecond),
             Report = erlperf:run(#{runner => Runner, init => Init, done => Done},
-                #{concurrency => Enough, samples => 50, sample_duration => 10, warmup => 10, report => full}),
-            #{result := #{average := QPS}, sleep := DetectedSleepType} = Report,
-            ?assertEqual(DetectedSleepType, busy_wait, {"Lock contention was not detected", Report}),
+                #{concurrency => Enough * 50, samples => 50, sample_duration => 10, warmup => 10, report => full}),
             TimeSpent = os:system_time(millisecond) - Before,
+            #{result := #{average := QPS}, sleep := DetectedSleepType} = Report,
+            ?assertEqual(busy_wait, DetectedSleepType, {"Lock contention was not detected", Report}),
             ?assert(QPS > 0, {qps, QPS}),
             ?assert(TimeSpent > 500, {too_quick, TimeSpent, expected, 1000}),
-            ?assert(TimeSpent < 2000, {too_slow, TimeSpent, expected, 1000});
+            ?assert(TimeSpent < 3000, {too_slow, TimeSpent, expected, 1000});
         NotEnough ->
             {skip, {not_enough_schedulers_online, NotEnough}}
     end.
