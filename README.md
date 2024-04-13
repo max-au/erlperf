@@ -55,14 +55,16 @@ dictionary.
     r() -> rand:uniform().                             1   16958 Ki      58 ns   65%
 ```
 
-5. Estimate `code:is_loaded/1` concurrency characteristics. This function is implemented as
-`gen_server:call`, and all calculations are done in a single process. It is still possible to
-squeeze a bit more from a single process by putting work into the queue from multiple runners.
+5. Estimate `./erlperf 'application_controller:is_running(kernel).` concurrency characteristics. This function
+is implemented as `gen_server:call`, and all calculations are done in a single process. It is still
+possible to squeeze a bit more from a single process by putting work into the queue from multiple runners.
 
 ```bash
-    $ ./erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).' --squeeze
-    Code                               ||        QPS       Time
-    code:is_loaded(local_udp).          4     969 Ki    4129 ns
+    $ ./erlperf 'application_controller:is_running(kernel).' --squeeze
+    Code                                               ||        QPS       Time
+    application_controller:is_running(kernel).          3    1189 Ki    2524 ns
+
+
 
     $ ./erlperf 'persistent_term:put(atom, "string").' -q
     Code                                         ||        QPS       Time

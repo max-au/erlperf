@@ -290,7 +290,7 @@ arguments() ->
         "\nFull documentation available at: https://hexdocs.pm/erlperf/\n"
         "\nBenchmark timer:sleep(1):\n    erlperf 'timer:sleep(1).'\n"
         "Benchmark rand:uniform() vs crypto:strong_rand_bytes(2):\n    erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1\n"
-        "Figure out concurrency limits:\n    erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).'\n"
+        "Figure out concurrency limits:\n    erlperf 'application_controller:is_running(kernel).' -q'\n"
         "Benchmark pg join/leave operations:\n    erlperf 'pg:join(s, foo, self()), pg:leave(s, foo, self()).' --init 'pg:start_link(s).'\n"
         "Timed benchmark for a single BIF:\n    erlperf 'erlang:unique_integer().' -l 1000000\n",
         arguments => [
