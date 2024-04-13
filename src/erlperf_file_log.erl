@@ -62,7 +62,7 @@ start_link(Filename) ->
     % current format line
     format = "" :: string(),
     % saved list of job IDs executed previously
-    jobs = [] :: [erlperf_monitor:job_sample()]
+    jobs = [] :: [erlperf_monitor:monitor_sample()]
 }).
 
 %% @private

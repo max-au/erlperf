@@ -9,6 +9,7 @@
   {applications,
    [kernel,
     stdlib,
+    compiler,
     argparse
    ]},
   {env,[]},
