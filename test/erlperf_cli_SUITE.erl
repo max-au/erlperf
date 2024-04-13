@@ -46,11 +46,11 @@ parse_qps(QPST, "Mi") -> list_to_integer(QPST) * 1000000;
 parse_qps(QPST, "Gi") -> list_to_integer(QPST) * 1000000000;
 parse_qps(QPST, "Ti") -> list_to_integer(QPST) * 1000000000000.
 
-parse_duration(TT, "ns") -> list_to_integer(TT) div 1000;
-parse_duration(TT, "us") -> list_to_integer(TT);
-parse_duration(TT, "ms") -> list_to_integer(TT) * 1000;
-parse_duration(TT, "s") -> list_to_integer(TT) * 1000000;
-parse_duration(TT, "m") -> list_to_integer(TT) * 60 * 1000000.
+parse_duration(TT, "ns") -> list_to_integer(TT);
+parse_duration(TT, "us") -> list_to_integer(TT) * 1000;
+parse_duration(TT, "ms") -> list_to_integer(TT) * 1000000;
+parse_duration(TT, "s") -> list_to_integer(TT) * 1000000000;
+parse_duration(TT, "m") -> list_to_integer(TT) * 60 * 1000000000.
 
 filtersplit(Str, Sep) ->
     [L || L <- string:split(Str, Sep, all), L =/= ""].
@@ -120,14 +120,14 @@ simple(Config) when is_list(Config) ->
     Out = capture_io(fun() -> erlperf_cli:main([Code, "-d", "100"]) end),
     [{Code, 1, C, T}] = parse_out(Out),
     ?assert(C > 25 andalso C < 110, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+    ?assert(T > 1000000 andalso T < 3000000, {time, T}).
 
 concurrent(Config) when is_list(Config) ->
     Code = "timer:sleep(1).",
     Out = capture_io(fun() -> erlperf_cli:main([Code, "-d", "100", "-c", "8"]) end),
     [{Code, 8, C, T}] = parse_out(Out),
     ?assert(C > 8 * 25 andalso C < 8 * 110, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+    ?assert(T > 1000000 andalso T < 3000000, {time, T}).
 
 % erlperf 'timer:sleep(1). -v'
 verbose(Config) when is_list(Config) ->
@@ -139,7 +139,7 @@ verbose(Config) when is_list(Config) ->
     %% parse last 2 lines
     [{Code, 1, C, T}] = parse_out(lists:join("\n", lists:sublist(Lines, length(Lines) - 1, 2))),
     ?assert(C > 250 andalso C < 1101, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+    ?assert(T > 1000000 andalso T < 3000000, {time, T}).
 
 % erlperf 'timer:sleep(1).' 'timer:sleep(2).' -d 100 -s 5 -w 1 -c 2
 compare(Config) when is_list(Config) ->
@@ -163,7 +163,7 @@ squeeze(Config) when is_list(Config) ->
         fun () -> erlperf_cli:main(["timer:sleep(1).", "--duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
     [{_Code, 4, C, T}] = parse_out(Out),
     ?assert(C > 50 andalso C < 220, {qps, C}),
-    ?assert(T > 1000 andalso T < 3000, {time, T}).
+    ?assert(T > 1000000 andalso T < 3000000, {time, T}).
 
 % erlperf -q
 usage(Config) when is_list(Config) ->
@@ -237,7 +237,7 @@ full_report(Config) when is_list(Config) ->
     ?assert(Med =< P99),
     ?assert(Dev < 50, {deviation, Dev}),
     ?assert(Avg > 25 andalso Avg < 110, {avg, Avg}),
-    ?assert(Time > 1000 andalso Time < 3000, {time, Time}).
+    ?assert(Time > 1000000 andalso Time < 3000000, {time, Time}).
 
 % erlperf 'timer:sleep(1).' -r basic -s 3 -l 50
 basic_timed_report(Config) when is_list(Config) ->
@@ -246,7 +246,7 @@ basic_timed_report(Config) when is_list(Config) ->
     [{_Code, 1, QPS, IterTime}] = parse_out(Out),
     ct:pal("Basic Timed Report:~n~p", [Out]),
     ?assert(QPS > 250 andalso QPS < 1100, {qps, QPS}), %% QPS of 'timer:sleep(1)' is ~500
-    ?assert(IterTime >= 1000 andalso IterTime < 3000, {time, IterTime}). %% single iteration of timer:sleep(1)
+    ?assert(IterTime >= 1000000 andalso IterTime < 3000000, {time, IterTime}). %% single iteration of timer:sleep(1)
 
 % erlperf 'timer:sleep(1).' -r full -l 100 -s 5
 full_timed_report(Config) when is_list(Config) ->
@@ -262,8 +262,8 @@ full_timed_report(Config) when is_list(Config) ->
     ?assertEqual(5, Samples),
     ?assert(Med =< P99),
     ?assert(Dev < 50, {deviation, Dev}),
-    ?assert(Avg >= 200000 andalso Avg < 400000, {avg, Avg}), %% average time to complete 100 iterations of sleep(1)
-    ?assert(Time >= 1000 andalso Time < 3000, {time, Time}). %% single timer:sleep(1) time, in us
+    ?assert(Avg >= 200000000 andalso Avg < 400000000, {avg, Avg}), %% average time to complete 100 iterations of sleep(1)
+    ?assert(Time >= 1000000 andalso Time < 3000000, {time, Time}). %% single timer:sleep(1) time, in us
 
 
 % erlperf 'runner(Arg) -> ok = pg2:join(Arg, self()), ok = pg2:leave(Arg, self()).' --init 'ets:file2tab("pg2.tab").'

@@ -1,6 +1,6 @@
 {application, erlperf,
  [{description, "Erlang Performance & Benchmarking Suite"},
-  {vsn, "2.2.0"},
+  {vsn, "2.2.1"},
   {registered, [
     erlperf_sup, erlperf_job_sup, erlperf_monitor,
    erlperf_history, erlperf_file_log, erlperf_cluster_monitor
@@ -9,6 +9,7 @@
   {applications,
    [kernel,
     stdlib,
+    compiler,
     argparse
    ]},
   {env,[]},

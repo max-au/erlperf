@@ -102,7 +102,7 @@ format(Reports, Options) ->
 main(Args) ->
     Prog = #{progname => "erlperf"},
     try
-        ParsedOpts = argparse:parse(Args, arguments(), Prog),
+        ParsedOpts = args:parse(Args, arguments(), Prog),
 
         Verbose = maps:get(verbose, ParsedOpts, false),
 
@@ -149,8 +149,8 @@ main(Args) ->
         Formatted = format(Results, FormatOpts#{viewport_width => viewport_width()}),
         io:format(Formatted)
     catch
-        error:{argparse, Reason} ->
-            Fmt = argparse:format_error(Reason, arguments(), Prog),
+        error:{args, Reason} ->
+            Fmt = args:format_error(Reason, arguments(), Prog),
             format(info, "Error: ~s", [Fmt]);
         throw:{parse, FunName, Other} ->
             format(error, "Unable to read file named '~s' (expected to contain call chain recording)~nReason: ~p\n"
@@ -290,7 +290,7 @@ arguments() ->
         "\nFull documentation available at: https://hexdocs.pm/erlperf/\n"
         "\nBenchmark timer:sleep(1):\n    erlperf 'timer:sleep(1).'\n"
         "Benchmark rand:uniform() vs crypto:strong_rand_bytes(2):\n    erlperf 'rand:uniform().' 'crypto:strong_rand_bytes(2).' --samples 10 --warmup 1\n"
-        "Figure out concurrency limits:\n    erlperf 'code:is_loaded(local_udp).' --init 'code:ensure_loaded(local_udp).'\n"
+        "Figure out concurrency limits:\n    erlperf 'application_controller:is_running(kernel).' -q'\n"
         "Benchmark pg join/leave operations:\n    erlperf 'pg:join(s, foo, self()), pg:leave(s, foo, self()).' --init 'pg:start_link(s).'\n"
         "Timed benchmark for a single BIF:\n    erlperf 'erlang:unique_integer().' -l 1000000\n",
         arguments => [
