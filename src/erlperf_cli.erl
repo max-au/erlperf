@@ -102,7 +102,7 @@ format(Reports, Options) ->
 main(Args) ->
     Prog = #{progname => "erlperf"},
     try
-        ParsedOpts = argparse:parse(Args, arguments(), Prog),
+        ParsedOpts = args:parse(Args, arguments(), Prog),
 
         Verbose = maps:get(verbose, ParsedOpts, false),
 
@@ -149,8 +149,8 @@ main(Args) ->
         Formatted = format(Results, FormatOpts#{viewport_width => viewport_width()}),
         io:format(Formatted)
     catch
-        error:{argparse, Reason} ->
-            Fmt = argparse:format_error(Reason, arguments(), Prog),
+        error:{args, Reason} ->
+            Fmt = args:format_error(Reason, arguments(), Prog),
             format(info, "Error: ~s", [Fmt]);
         throw:{parse, FunName, Other} ->
             format(error, "Unable to read file named '~s' (expected to contain call chain recording)~nReason: ~p\n"

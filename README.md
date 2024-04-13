@@ -311,16 +311,16 @@ on disk.
 
 Use `-pa` argument to add an extra code path. Example:
 ```bash
-    $ ./erlperf 'argparse:parse([], #{}).' -pa _build/test/lib/argparse/ebin
+    $ ./erlperf 'args:parse([], #{}).' -pa _build/test/lib/argparse/ebin
     Code                             ||        QPS       Time
-    argparse:parse([], #{}).          1     955 Ki    1047 ns
+    args:parse([], #{}).              1     955 Ki    1047 ns
 ```
 
 If you need to add multiple released applications, supply `ERL_LIBS` environment variable instead:
 ```bash
-    $ ERL_LIBS="_build/test/lib" erlperf 'argparse:parse([], #{}).'
+    $ ERL_LIBS="_build/test/lib" erlperf 'args:parse([], #{}).'
     Code                             ||        QPS       Time
-    argparse:parse([], #{}).          1     735 Ki    1361 ns
+    args:parse([], #{}).              1     735 Ki    1361 ns
 ```
 
 ### Usage in production

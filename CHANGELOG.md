@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.1
+- tested with OTP 26 and 27
+- updated to argparse 2.0.0
+
 ## 2.2.0
 - added extended and full reporting capabilities
 - implemented additional statistics (standard deviation, median, p99)
