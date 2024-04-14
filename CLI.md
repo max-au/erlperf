@@ -9,22 +9,22 @@ erlperf [FLAG] runner [INIT] [INIT_RUNNER] [DONE] [runner...]
 
 ## Flags
 
-| Short | Long              | Description                                                                                                                                                      |
-|-------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| -c    | --concurrency     | Specifies the number of workers per job. Allowed only in continuous mode                                                                                         |
-|       | --cv              | Coefficient of variation. Accepted in continuous and concurrency estimation mode. Benchmark keeps running until standard deviation is below the specified number |
-| -i    | --isolation       | Requests to run every benchmark in a separate Erlang VM for isolation purposes                                                                                   |
-| -s    | --samples         | Number of samples to take. Defaults to 1 for timed mode, 3 for continuous and concurrency estimation                                                             |
-| -d    | --sample_duration | Sample duration, in milliseconds, for continuous and concurrency estimation modes                                                                                |
-| -l    | --loop            | Sample duration (iterations) for the timed mode. Engages timed mode when specified                                                                               |
-|       | --max             | Maximum number of workers allowed in the concurrency estimation mode                                                                                             |
-|       | --min             | Starting number of workers in concurrency estimation mode                                                                                                        |
-| -pa   |                   | Adds extra code path to the Erlang VM. Useful for benchmarking *.beam files on your filesystem                                                                   |
-| -r    | --report          | Requests `basic`, `extended` or `full` report. Defaults to `basic` when less than 10 samples are requested, and `extended` for 10 and more                       |
-| -q    | -squeeze          | Engages concurrency estimation mode                                                                                                                              |
-| -t    | -threshold        | Sets number of extra workers to try in concurrency estimation mode before concluding the test                                                                    |
-| -v    | --verbose         | Turns on verbose logging (VM statistics and performance of continuous jobs)                                                                                      |
-| -w    | --warmup          | Warmup                                                                                                                                                           |
+| Short | Long              | Description                                                                                                                                                       |
+|-------|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| -c    | --concurrency     | Specifies the number of workers per job. Allowed only in continuous mode                                                                                          |
+|       | --cv              | Coefficient of variation. Accepted in continuous and concurrency estimation mode. Benchmark keeps running until standard deviation is below the specified number  |
+| -i    | --isolation       | Requests to run every benchmark in a separate Erlang VM for isolation purposes                                                                                    |
+| -s    | --samples         | Number of samples to take. Defaults to 1 for timed mode, 3 for continuous and concurrency estimation                                                              |
+| -d    | --sample_duration | Sample duration, in milliseconds, for continuous and concurrency estimation modes                                                                                 |
+| -l    | --loop            | Sample duration (iterations) for the timed mode. Engages timed mode when specified                                                                                |
+|       | --max             | Maximum number of workers allowed in the concurrency estimation mode                                                                                              |
+|       | --min             | Starting number of workers in concurrency estimation mode                                                                                                         |
+| -pa   |                   | Adds extra code path to the Erlang VM. Useful for benchmarking *.beam files on your filesystem                                                                    |
+| -r    | --report          | Requests `basic`, `extended` or `full` report. Defaults to `basic` when less than 10 samples are requested, and `extended` for 10 and more                        |
+| -q    | -squeeze          | Engages concurrency estimation mode                                                                                                                               |
+| -t    | -threshold        | Sets number of extra workers to try in concurrency estimation mode before concluding the test                                                                     |
+| -v    | --verbose         | Turns on verbose mode, including generated source code, VM statistics and performance of continuous jobs)                                                         |
+| -w    | --warmup          | Warmup                                                                                                                                                            |
 
 ## Benchmark code
 At least one runner code is required. Specify multiple runner codes to perform

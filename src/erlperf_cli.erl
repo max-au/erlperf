@@ -204,6 +204,11 @@ determine_mode(ParsedOpts) ->
 benchmark(Codes, RunOpts, ConcurrencyTestOpts, false) ->
     erlperf:benchmark(Codes, RunOpts, ConcurrencyTestOpts);
 benchmark(Codes, RunOpts, ConcurrencyTestOpts, true) ->
+    [begin
+         io:format(">>>>>>>>>>>>>>> ~-32ts ~n", [format_code(maps:get(runner, C))]),
+         [io:format("~ts~n", [L]) || L <- erlperf_job:source(C)],
+         io:format("<<<<<<<<<<<<<<< ~n")
+     end|| C <- Codes],
     {ok, Pg} = pg:start_link(erlperf),
     {ok, Monitor} = erlperf_monitor:start_link(),
     {ok, Logger} = erlperf_file_log:start_link(),

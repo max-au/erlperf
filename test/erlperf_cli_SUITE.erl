@@ -136,6 +136,16 @@ verbose(Config) when is_list(Config) ->
     Lines = filtersplit(Out, "\n"),
     %% TODO: actually verify that stuff printed is monitoring stuff
     ?assert(length(Lines) > 3),
+    %% expect first 5 lines to contain source code
+    Generated = lists:sublist(Lines, 1, 12),
+    ?assertEqual(Generated, [
+        ">>>>>>>>>>>>>>> timer:sleep(1).                  ",
+        "-module(benchmark).",
+        "-export([benchmark/0, benchmark_finite/1]).","benchmark() ->",
+        "    timer:sleep(1),","    benchmark().",
+        "benchmark_finite(0) ->","    ok;","benchmark_finite(Count) ->",
+        "    timer:sleep(1),","    benchmark_finite(Count - 1).",
+        "<<<<<<<<<<<<<<< "]),
     %% parse last 2 lines
     [{Code, 1, C, T}] = parse_out(lists:join("\n", lists:sublist(Lines, length(Lines) - 1, 2))),
     ?assert(C > 250 andalso C < 1101, {qps, C}),
