@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.2.2
+- added generated source code output in verbose mode
+
 ## 2.2.1
 - tested with OTP 26 and 27
 - updated to argparse 2.0.0
