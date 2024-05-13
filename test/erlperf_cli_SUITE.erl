@@ -15,7 +15,7 @@
     double/1, triple/1, pg/1, mfa/1,
     full_report/1, basic_timed_report/1, full_timed_report/1,
     recorded/1,
-    squeeze/0, squeeze/1,
+    squeeze/0, squeeze/1, step/1,
     init_all/0, init_all/1
 ]).
 
@@ -26,7 +26,7 @@ suite() ->
     [{timetrap, {seconds, 20}}].
 
 all() ->
-    [simple, concurrent, verbose, compare, squeeze, usage, init, double,
+    [simple, concurrent, verbose, compare, squeeze, step, usage, init, double,
         triple, pg, mfa, full_report, basic_timed_report, full_timed_report, recorded, init_all].
 
 %%--------------------------------------------------------------------
@@ -167,7 +167,7 @@ compare(Config) when is_list(Config) ->
 squeeze() ->
     [{doc, "Tests concurrency test via command line"}, {timetrap, {seconds, 30}}].
 
-% erlperf 'timer:sleep(1).' --sample_duration 50 --squeeze --min 2 --max 4 --threshold 2
+% erlperf 'timer:sleep(1).' --duration 50 --squeeze --min 2 --max 4 --threshold 2
 squeeze(Config) when is_list(Config) ->
     Out = capture_io(
         fun () -> erlperf_cli:main(["timer:sleep(1).", "--duration", "50", "--squeeze", "--min", "2", "--max", "4", "--threshold", "2"]) end),
@@ -175,6 +175,13 @@ squeeze(Config) when is_list(Config) ->
     ?assert(C > 50 andalso C < 220, {qps, C}),
     ?assert(T > 1000000 andalso T < 3000000, {time, T}).
 
+% erlperf 'timer:sleep(1).' --duration 50 --squeeze --min 1 --max 25 --step 10
+step(Config) when is_list(Config) ->
+    Out = capture_io(
+        fun () -> erlperf_cli:main(["timer:sleep(1).", "--duration", "50", "--squeeze", "--min", "1", "--max", "25", "--step", "10"]) end),
+    [{_Code, 20, C, T}] = parse_out(Out),
+    ?assert(C > 400 andalso C < 600, {qps, C}),
+    ?assert(T > 1000000 andalso T < 3000000, {time, T}).
 % erlperf -q
 usage(Config) when is_list(Config) ->
     Out = capture_io(fun () -> erlperf_cli:main(["-q"]) end),

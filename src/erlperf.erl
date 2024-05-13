@@ -124,12 +124,14 @@
 -type concurrency_test() :: #{
     threshold => pos_integer(),
     min => pos_integer(),
+    step => pos_integer(),
     max => pos_integer()
 }.
 %% Concurrency estimation mode options.
 %%
 %% <ul>
 %%   <li>`min': initial number of workers, default is 1</li>
+%%   <li>`step': increase the number of workers by this value on each iteration, default is 1</li>
 %%   <li>`max': maximum number of workers, defaults to `erlang:system_info(process_limit) - 1000'</li>
 %%   <li>`threshold': stop concurrency run when adding this amount of workers does
 %%     not result in further total throughput increase. Default is 3</li>
@@ -418,7 +420,7 @@ record(Module, Function, Arity, TimeMs) ->
 concurrency_mode_defaults(undefined) ->
     undefined;
 concurrency_mode_defaults(ConOpts) ->
-    maps:merge(#{min => 1, max => erlang:system_info(process_limit) - 1000, threshold => 3}, ConOpts).
+    maps:merge(#{min => 1, step => 1, max => erlang:system_info(process_limit) - 1000, threshold => 3}, ConOpts).
 
 run_options_defaults(RunOptions) ->
     maps:merge(#{
@@ -649,7 +651,7 @@ difference([S, F | Tail]) ->
 %% Test considered complete when either:
 %%  * maximum number of workers reached
 %%  * last 'threshold' added workers did not increase throughput
-estimate_concurrency(Jobs, Options, #{threshold := Threshold, max := Max} = ConOpts, Handles, Current, History, QMax) ->
+estimate_concurrency(Jobs, Options, #{threshold := Threshold, step := Step, max := Max} = ConOpts, Handles, Current, History, QMax) ->
     RunOptions = Options#{concurrency => Current},
     [Report] = benchmark_impl(Jobs, RunOptions, undefined, Handles),
     #{result := Result0} = Report,
@@ -658,6 +660,8 @@ estimate_concurrency(Jobs, Options, #{threshold := Threshold, max := Max} = ConO
     QPS = lists:sum(difference(Samples)) div (length(Samples) - 1),
     Result = Result0#{average => QPS},
     NewHistory = [{Current, Result} | History],
+    %% this gives us nice round numbers (eg. with step of 10, we'll have [1, 10, 20...])
+    Next = (Current + Step) div Step * Step,
     %% test if we are at Max concurrency, or saturated the node
     case maxed(QPS, Current, QMax, Threshold) of
         true ->
@@ -667,13 +671,13 @@ estimate_concurrency(Jobs, Options, #{threshold := Threshold, max := Max} = ConO
             {BestConcurrency, BestResult} = lists:keyfind(BestConcurrency, 1, History),
             #{mode => concurrency, result => BestResult, history => NewHistory, sleep => SleepMethod,
                 concurrency_options => ConOpts, run_options => Options#{concurrency => BestConcurrency}};
-        _NewQMax when Current =:= Max ->
+        _NewQMax when Next > Max ->
             #{sleep := SleepMethod} = Report,
             #{mode => concurrency, result => Result, history => NewHistory, sleep => SleepMethod,
                 concurrency_options => ConOpts, run_options => RunOptions};
         NewQMax ->
             % need more workers
-            estimate_concurrency(Jobs, RunOptions, ConOpts, Handles, Current + 1, NewHistory, NewQMax)
+            estimate_concurrency(Jobs, RunOptions, ConOpts, Handles, Next, NewHistory, NewQMax)
     end.
 
 maxed(QPS, Current, {Q, _}, _) when QPS > Q ->
@@ -682,7 +686,6 @@ maxed(_, Current, {_, W}, Count) when Current - W >= Count ->
     true;
 maxed(_, _, QMax, _) ->
     QMax.
-
 
 multicall_result([], Acc) ->
     lists:reverse(Acc);
