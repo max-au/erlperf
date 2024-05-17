@@ -10,7 +10,7 @@
 -export([suite/0, all/0]).
 
 -export([
-    simple/1, concurrent/1, verbose/1, compare/1,
+    simple/1, concurrent/1, verbose/1, zero/1, compare/1,
     usage/1, init/1,
     double/1, triple/1, pg/1, mfa/1,
     full_report/1, basic_timed_report/1, full_timed_report/1,
@@ -26,7 +26,7 @@ suite() ->
     [{timetrap, {seconds, 20}}].
 
 all() ->
-    [simple, concurrent, verbose, compare, squeeze, step, usage, init, double,
+    [simple, concurrent, verbose, zero, compare, squeeze, step, usage, init, double,
         triple, pg, mfa, full_report, basic_timed_report, full_timed_report, recorded, init_all].
 
 %%--------------------------------------------------------------------
@@ -70,6 +70,9 @@ parse_out(Out) ->
         ["Code", "||", "QPS", "Time", "Rel"] ->
             [begin
                  case filtersplit(Ln, " ") of
+                     [Code, ConcT, "0", "inf", Rel] ->
+                         {Code, list_to_integer(ConcT), 0, infinity,
+                             list_to_integer(lists:droplast(Rel))};
                      [Code, ConcT, QPST, TT, TTU, Rel] ->
                          {Code, list_to_integer(ConcT), parse_qps(QPST, ""), parse_duration(TT, TTU),
                              list_to_integer(lists:droplast(Rel))};
@@ -150,6 +153,14 @@ verbose(Config) when is_list(Config) ->
     [{Code, 1, C, T}] = parse_out(lists:join("\n", lists:sublist(Lines, length(Lines) - 1, 2))),
     ?assert(C > 250 andalso C < 1101, {qps, C}),
     ?assert(T > 1000000 andalso T < 3000000, {time, T}).
+
+% erlperf 'timer:sleep(100).' 'timer:sleep(200).' -d 10
+zero(Config) when is_list(Config) ->
+    Out = capture_io(fun () -> erlperf_cli:main(["timer:sleep(100).", "timer:sleep(200).", "-d", "10"]) end),
+    % Code            Concurrency   Throughput      Time      Rel
+    % timer:sleep(200).          1          0        inf       0%
+    % timer:sleep(100).          1          0        inf       0%
+    [{_Code, 1, 0, infinity, 0}, {_Code2, 1, 0, infinity, 0}] = parse_out(Out).
 
 % erlperf 'timer:sleep(1).' 'timer:sleep(2).' -d 100 -s 5 -w 1 -c 2
 compare(Config) when is_list(Config) ->
