@@ -193,7 +193,7 @@ determine_mode(#{concurrency_estimation := true} = ParsedOpts) ->
     length(maps:get(code, ParsedOpts)) > 1 andalso
         erlang:error({generic, "Parallel concurrency estimation runs are not supported~n"}),
     RunOpts = maps:with([sample_duration, samples, warmup, cv], ParsedOpts),
-    {RunOpts, maps:with([min, max, threshold], ParsedOpts)};
+    {RunOpts, maps:with([min, step, max, threshold], ParsedOpts)};
 
 %% continuous mode
 determine_mode(ParsedOpts) ->
@@ -329,6 +329,9 @@ arguments() ->
                 help => "run concurrency estimation test"},
             #{name => min, long => "-min",
                 help => "start with this amount of processes (1)",
+                type => {int, [{min, 1}]}},
+            #{name => step, long => "-step",
+                help => "increase the number of processes by this value on each iteration (1)",
                 type => {int, [{min, 1}]}},
             #{name => max, long => "-max",
                 help => "do not exceed this number of processes",
