@@ -418,7 +418,7 @@ format_report_line(MaxAvg, #{mode := timed, code := #{runner := Code}, result :=
 
 format_report_line(MaxAvg, #{code := #{runner := Code}, result := #{average := Avg, stddev := StdDev,
     iteration_time := IterationTime, p99 := P99, median := Median, samples := Samples},
-    run_options := #{concurrency := Concurrency}}, _ReportFormat) ->
+    run_options := #{concurrency := Concurrency}}, _ReportFormat) when Avg > 0.5 ->
     [
         format_code(Code),
         integer_to_list(Concurrency),
@@ -429,6 +429,20 @@ format_report_line(MaxAvg, #{code := #{runner := Code}, result := #{average := A
         erlperf_file_log:format_number(P99),
         erlperf_file_log:format_duration(IterationTime),
         integer_to_list(erlang:round(Avg * 100 / MaxAvg)) ++ "%"
+    ];
+
+format_report_line(_MaxAvg, #{code := #{runner := Code}, result := #{samples := Samples},
+    run_options := #{concurrency := Concurrency}}, _ReportFormat) ->
+    [
+        format_code(Code),
+        integer_to_list(Concurrency),
+        integer_to_list(length(Samples) - 1),
+        "0",
+        "inf",
+        "0",
+        "0",
+        "inf",
+        "0%"
     ].
 
 %% generic table formatter routine, accepting list of lists
