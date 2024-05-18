@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.0
+- added warning for non-optimised ERTS build running the benchmark
+- fixed output for continuous mode when samples are zero
+- added `step` for quicker concurrency estimation mode (@mkuratczyk)
+
 ## 2.2.2
 - added generated source code output in verbose mode
 
