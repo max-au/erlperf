@@ -372,23 +372,23 @@ color(info, Text) -> Text.
 
 %% Report formatter
 format_report(full, [#{system := System} | _] = Reports, Width) ->
-    [format_system(System), format_report(extended, Reports, Width)];
+    warn_system(System) ++ [format_system(System), format_report(extended, Reports, Width)];
 
-format_report(extended, Reports, Width) ->
+format_report(extended, [#{system := System} | _] = Reports, Width) ->
     Sorted = sort_by(Reports),
     #{result := #{average := MaxAvg}} = hd(Sorted),
     Header = ["Code", "   ||", "  Samples", "      Avg", "  StdDev", "   Median", "     P99", " Iteration", "   Rel"],
     Data = [format_report_line(MaxAvg, ReportLine, extended) || ReportLine <- Sorted],
-    format_table(remove_relative_column([Header | Data]), Width);
+    warn_system(System) ++ format_table(remove_relative_column([Header | Data]), Width);
 
-format_report(basic, Reports, Width) ->
+format_report(basic, [#{system := System} | _] = Reports, Width) ->
     Sorted = sort_by(Reports),
     #{result := #{average := MaxAvg}} = hd(Sorted),
     Header = ["Code", "       ||", "       QPS", "      Time", "  Rel"],
     Data0 = [format_report_line(MaxAvg, ReportLine, basic) || ReportLine <- Sorted],
     %% remove columns that should not be displayed in basic mode
     Data = [[C1, C2, C3, C4, C5] || [C1, C2, _, C3, _, _, _, C4, C5] <- Data0],
-    format_table(remove_relative_column([Header | Data]), Width).
+    warn_system(System) ++ format_table(remove_relative_column([Header | Data]), Width).
 
 sort_by([#{mode := timed} | _] = Reports) ->
     lists:sort(fun (#{result := #{average := L}}, #{result := #{average := R}}) -> L < R end, Reports);
@@ -460,6 +460,15 @@ format_code(Code) when is_list(Code) ->
     Code;
 format_code(Code) when is_binary(Code) ->
     binary_to_list(Code).
+
+warn_system(#{emu_flavor := jit, emu_type := opt, dynamic_trace := none}) ->
+    [];
+warn_system(#{emu_flavor := jit, emu_type := opt, dynamic_trace := Trace} = System) ->
+    [io_lib:format("WARNING: Dynamic Trace Probes enabled (~s detected)~n", [Trace]) | warn_system(System#{dynamic_trace => none})];
+warn_system(#{emu_flavor := jit, emu_type := Type} = System) ->
+    [io_lib:format("WARNING: Emulator is not optimised (~s detected)~n", [Type]) | warn_system(System#{emu_type => opt})];
+warn_system(#{emu_flavor := Flavor} = System) ->
+    [io_lib:format("WARNING: Emulator is not JIT (~s detected)~n", [Flavor]) | warn_system(System#{emu_flavor => jit})].
 
 format_system(#{os := OSType, system_version := SystemVsn} = System) ->
     OS = io_lib:format("OS : ~s~n", [format_os(OSType)]),

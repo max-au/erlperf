@@ -163,6 +163,10 @@
 -type system_information() :: #{
     os := {unix | win32, atom()},
     system_version := string(),
+    debug => boolean(),     %% true if the emulator has been debug-compiled, otherwise false
+    emu_type := atom(),   %% see system_info(emu_type)
+    emu_flavor := atom(), %% see system_info(emu_flavor)
+    dynamic_trace => atom(), %% see system_info(dynamic_trace)
     cpu => string()
 }.
 %% System information, as returned by {@link erlang:system_info/1}
@@ -781,6 +785,9 @@ system_report() ->
     OSType = erlang:system_info(os_type),
     Guaranteed = #{
         os => OSType,
+        emu_type => erlang:system_info(emu_type),
+        emu_flavor => erlang:system_info(emu_flavor),
+        dynamic_trace => erlang:system_info(dynamic_trace),
         system_version => string:trim(erlang:system_info(system_version), trailing)
     },
     try Guaranteed#{cpu => string:trim(detect_cpu(OSType), both)}
