@@ -6,7 +6,7 @@ Erlang Performance & Benchmarking Suite.
 Simple way to say "this code is faster than that one". See [CLI reference](CLI.md)
 and detailed API reference for `erlperf` and `erlperf_job` modules.
 
-Build (tested with OTP 23, 24, 25):
+Build (tested with OTP 23-27):
 
 ```bash
     $ rebar3 as prod escriptize
