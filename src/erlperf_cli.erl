@@ -461,14 +461,14 @@ format_code(Code) when is_list(Code) ->
 format_code(Code) when is_binary(Code) ->
     binary_to_list(Code).
 
-warn_system(#{emu_flavor := jit, emu_type := opt, dynamic_trace := none}) ->
-    [];
-warn_system(#{emu_flavor := jit, emu_type := opt, dynamic_trace := Trace} = System) ->
-    [io_lib:format("WARNING: Dynamic Trace Probes enabled (~s detected)~n", [Trace]) | warn_system(System#{dynamic_trace => none})];
-warn_system(#{emu_flavor := jit, emu_type := Type} = System) ->
-    [io_lib:format("WARNING: Emulator is not optimised (~s detected)~n", [Type]) | warn_system(System#{emu_type => opt})];
-warn_system(#{emu_flavor := Flavor} = System) ->
-    [io_lib:format("WARNING: Emulator is not JIT (~s detected)~n", [Flavor]) | warn_system(System#{emu_flavor => jit})].
+warn_system(#{dynamic_trace := Trace} = System) when Trace =/= none ->
+    [io_lib:format("WARNING: Dynamic Trace Probes enabled (~s detected)~n", [Trace]) | warn_system(maps:remove(dynamic_trace, System))];
+warn_system(#{emu_type := Type} = System) when Type =/= opt ->
+    [io_lib:format("WARNING: Emulator is not optimised (~s detected)~n", [Type]) | warn_system(maps:remove(emu_type, System))];
+warn_system(#{emu_flavor := Flavor} = System) when Flavor =/= jit ->
+    [io_lib:format("WARNING: Emulator is not JIT (~s detected)~n", [Flavor]) | warn_system(maps:remove(emu_flavor, System))];
+warn_system(_) ->
+    [].
 
 format_system(#{os := OSType, system_version := SystemVsn} = System) ->
     OS = io_lib:format("OS : ~s~n", [format_os(OSType)]),
