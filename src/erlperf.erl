@@ -164,9 +164,9 @@
     os := {unix | win32, atom()},
     system_version := string(),
     debug => boolean(),     %% true if the emulator has been debug-compiled, otherwise false
-    emu_type := atom(),   %% see system_info(emu_type)
-    emu_flavor := atom(), %% see system_info(emu_flavor)
-    dynamic_trace => atom(), %% see system_info(dynamic_trace)
+    emu_type => atom(),     %% see system_info(emu_type), since OTP 24
+    emu_flavor => atom(),   %% see system_info(emu_flavor), since OTP 24
+    dynamic_trace => atom(),%% see system_info(dynamic_trace), since OTP 24
     cpu => string()
 }.
 %% System information, as returned by {@link erlang:system_info/1}
@@ -783,15 +783,19 @@ report_stats(Samples) ->
 
 system_report() ->
     OSType = erlang:system_info(os_type),
-    Guaranteed = #{
+    Guaranteed = detect_feature([emu_type, emu_flavor, dynamic_trace], #{
         os => OSType,
-        emu_type => erlang:system_info(emu_type),
-        emu_flavor => erlang:system_info(emu_flavor),
-        dynamic_trace => erlang:system_info(dynamic_trace),
         system_version => string:trim(erlang:system_info(system_version), trailing)
-    },
+    }),
     try Guaranteed#{cpu => string:trim(detect_cpu(OSType), both)}
     catch _:_ -> Guaranteed
+    end.
+
+detect_feature([], System) ->
+    System;
+detect_feature([F | T], System) ->
+    try detect_feature(T, System#{F => erlang:system_info(F)})
+    catch error:badarg -> detect_feature(T, System)
     end.
 
 detect_cpu({unix, freebsd}) ->
