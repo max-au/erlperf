@@ -184,7 +184,8 @@
     runner := callable(),
     init => callable(),
     init_runner => callable(),
-    done => callable()
+    done => callable(),
+    label => iodata()
 }.
 %% Code map contains definitions for:
 %%
@@ -207,6 +208,8 @@
 %%   <li>`done/0,1' - called when the job terminates, to clean up any resources
 %%       that are not destroyed automatically. done/0 accepts the return of init/0.
 %%       Call is made in the context of the job controller</li>
+%%   <li>`label' - runner label displayed in reports.
+%%       By default, the runner code is converted to a string</li>
 %% </ul>
 
 %% Internal (opaque) type, please do not use

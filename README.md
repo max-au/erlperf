@@ -161,6 +161,7 @@ A benchmark may define following functions:
 * **init** (optional): executed once when the job starts
 * **done** (optional): executed once when the job is about to stop
 * **init_runner** (optional): executed on every worker process startup
+* **label** (optional): string that overrides the code value in reports
 
 See `erlperf_job` for the detailed reference and ways to define a function (**callable**).
 
@@ -271,7 +272,7 @@ This is the default report form when less than 10 samples were collected.
 Use `-r basic` to force basic reports with 10 and more samples.
 
 Basic report contains following columns:
- * **Code**: Erlang code supplied to the benchmark
+ * **Code**: Erlang code or label supplied to the benchmark
  * **||**: how many concurrent processes were running. In the timed mode, it is always 1. In the concurrency
    estimation mode, the number that achieved the highest total throughput (QPS)
  * **QPS**: average number of runner code *iterations* (throughput). Measure per single *sample_duration*
