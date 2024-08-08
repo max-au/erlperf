@@ -43,6 +43,7 @@ erlperf --init_runner '2.' 'run(1) -> ok.' 'run(2) -> ok.' --init_runner '1.'
 | --init            | Job initialisation code, see accepted callable formats below              |
 | --init_runner     | Worker initialisation code                                                |
 | --done            | Job cleanup code                                                          |
+| --label           | Runner label                                                              |
 |                   |                                                                           |
 | --init_all        | Default init code for all runners that do not have a specific code        |
 | --init_runner_all | Default init_runner code                                                  |

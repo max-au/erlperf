@@ -124,9 +124,9 @@ main(Args) ->
 
         %% find all runners
         Code0 = [parse_code(C) || C <- maps:get(code, ParsedOpts)],
-        %% find associated init, init_runner, done
+        %% find associated init, init_runner, done, label
         {_, Codes} = lists:foldl(fun callable/2, {ParsedOpts, Code0},
-            [{init, init_all}, {init_runner, init_runner_all}, {done, done_all}]),
+            [{init, init_all}, {init_runner, init_runner_all}, {done, done_all}, {label, undefined}]),
 
         %% when isolation is requested, the node must be distributed
         RunOpts = case is_map_key(isolation, ParsedOpts) of
@@ -205,7 +205,7 @@ benchmark(Codes, RunOpts, ConcurrencyTestOpts, false) ->
     erlperf:benchmark(Codes, RunOpts, ConcurrencyTestOpts);
 benchmark(Codes, RunOpts, ConcurrencyTestOpts, true) ->
     [begin
-         io:format(">>>>>>>>>>>>>>> ~-32ts ~n", [format_code(maps:get(runner, C))]),
+         io:format(">>>>>>>>>>>>>>> ~-32ts ~n", [format_code(C)]),
          [io:format("~ts~n", [L]) || L <- erlperf_job:source(C)],
          io:format("<<<<<<<<<<<<<<< ~n")
      end|| C <- Codes],
@@ -345,6 +345,8 @@ arguments() ->
                 help => "done code", nargs => 1, action => append},
             #{name => init_runner, long => "-init_runner",
                 help => "init_runner code", nargs => 1, action => append},
+            #{name => label, long => "-label", type => string,
+                help => "runner label", nargs => 1, action => append},
             #{name => init_all, long => "-init_all",
                 help => "default init code for all runners"},
             #{name => done_all, long => "-done_all",
@@ -400,7 +402,7 @@ remove_relative_column([H, D]) ->
 remove_relative_column(HasRelative) ->
     HasRelative.
 
-format_report_line(MaxAvg, #{mode := timed, code := #{runner := Code}, result := #{average := Avg, stddev := StdDev,
+format_report_line(MaxAvg, #{mode := timed, code := Code, result := #{average := Avg, stddev := StdDev,
     iteration_time := IterationTime, p99 := P99, median := Median, samples := Samples},
     run_options := #{concurrency := Concurrency}}, ReportFormat) ->
     [
@@ -416,7 +418,7 @@ format_report_line(MaxAvg, #{mode := timed, code := #{runner := Code}, result :=
         integer_to_list(erlang:round(MaxAvg * 100 / Avg)) ++ "%"
     ];
 
-format_report_line(MaxAvg, #{code := #{runner := Code}, result := #{average := Avg, stddev := StdDev,
+format_report_line(MaxAvg, #{code := Code, result := #{average := Avg, stddev := StdDev,
     iteration_time := IterationTime, p99 := P99, median := Median, samples := Samples},
     run_options := #{concurrency := Concurrency}}, _ReportFormat) when Avg > 0.5 ->
     [
@@ -431,7 +433,7 @@ format_report_line(MaxAvg, #{code := #{runner := Code}, result := #{average := A
         integer_to_list(erlang:round(Avg * 100 / MaxAvg)) ++ "%"
     ];
 
-format_report_line(_MaxAvg, #{code := #{runner := Code}, result := #{samples := Samples},
+format_report_line(_MaxAvg, #{code := Code, result := #{samples := Samples},
     run_options := #{concurrency := Concurrency}}, _ReportFormat) ->
     [
         format_code(Code),
@@ -464,15 +466,24 @@ format_table([Header | Data] = Rows, Width) ->
 viewport_width() ->
     case io:columns() of {ok, C} -> C; _ -> 80 end.
 
-format_code(Code) when is_tuple(Code) ->
+format_code(#{label := Label}) when is_list(Label) ->
+    Label;
+format_code(#{label := Label}) when is_binary(Label) ->
+    binary_to_list(Label);
+format_code(#{label := undefined, runner := Runner}) ->
+    format_code_1(Runner);
+format_code(#{runner := Runner}) ->
+    format_code_1(Runner).
+
+format_code_1(Code) when is_tuple(Code) ->
     lists:flatten(io_lib:format("~tp", [Code]));
-format_code(Code) when is_tuple(hd(Code)) ->
+format_code_1(Code) when is_tuple(hd(Code)) ->
     lists:flatten(io_lib:format("[~tp, ...]", [hd(Code)]));
-format_code(Code) when is_function(Code) ->
+format_code_1(Code) when is_function(Code) ->
     lists:flatten(io_lib:format("~tp", [Code]));
-format_code(Code) when is_list(Code) ->
+format_code_1(Code) when is_list(Code) ->
     Code;
-format_code(Code) when is_binary(Code) ->
+format_code_1(Code) when is_binary(Code) ->
     binary_to_list(Code).
 
 warn_system(#{dynamic_trace := Trace} = System) when Trace =/= none ->

@@ -16,7 +16,8 @@
     full_report/1, basic_timed_report/1, full_timed_report/1,
     recorded/1,
     squeeze/0, squeeze/1, step/1,
-    init_all/0, init_all/1
+    init_all/0, init_all/1,
+    label/1
 ]).
 
 %%--------------------------------------------------------------------
@@ -27,7 +28,8 @@ suite() ->
 
 all() ->
     [simple, concurrent, verbose, zero, compare, squeeze, step, usage, init, double,
-        triple, pg, mfa, full_report, basic_timed_report, full_timed_report, recorded, init_all].
+        triple, pg, mfa, full_report, basic_timed_report, full_timed_report, recorded, init_all,
+            label].
 
 %%--------------------------------------------------------------------
 %% helper functions
@@ -342,3 +344,10 @@ init_all(Config) when is_list(Config) ->
     ?assert(C3 > 5 andalso C3 < 11, {qps, C3}), %% 10 ms delay
     ?assert(R > R2), %% 5 ms delay is less than 2 ms
     ?assert(R2 > R3). %% 5 ms delay is more than 10 ms
+
+% erlperf 'foo.' --label bar
+label(Config) when is_list(Config) ->
+    Out = capture_io(
+        fun () -> erlperf_cli:main(["foo.", "--label", "bar"]) end),
+    [{Label, _, _, _}] = parse_out(Out),
+    ?assertEqual("bar", Label).
